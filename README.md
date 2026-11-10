@@ -15,14 +15,6 @@ Sudachi. It is not affiliated with Nintendo, with Lichii or with any of those pr
 
 Dozerr is in early development. Support is very limited.
 
-## Where this comes from
-
-- **Lichii** is the base and the upstream: Dozerr follows it and merges its updates.
-- **Dozer**, an earlier fork of Anka, was tuned for the same game. Its performance work, above
-  all the host-GPU read of Bananza's indirect terrain draws, is being brought across to this
-  base one piece at a time. Dozer had an intermittent black shape with a white bloom halo on
-  destroyed terrain that Lichii does not show, and moving to this base is meant to keep it away.
-
 ## Downloads and setup
 
 Test builds are produced by this repository's GitHub Actions (the `dozerr-test-builds` workflow,
