@@ -67,20 +67,14 @@ void OnBack(const Func& func) {
 
 namespace Peek = VideoCommon::Nx2AcquirePeek;
 
-// Unset: on, so the heavy-spot run shows whether equal acquires guest memory already meets can
-// skip the drain. EDEN_NX2_ACQUIRE_PEEK=0 drains every equal acquire as before. =2 drains and
-// warns where skipping would have gone on and the word after the drain no longer meets it.
+// Unset or =0: every equal acquire drains. The heavy spot skipped none of them. =1 skips where
+// Decide allows it. =2 drains and warns where skipping would have gone on and the word after the
+// drain no longer meets it.
 static_assert(static_cast<size_t>(Peek::Verdict::Count) == 9);
 static_assert(static_cast<size_t>(Peek::Verdict::Untracked) == 8);
 
 Peek::Mode PeekMode() {
-    static const Peek::Mode mode = [] {
-        const char* value = std::getenv("EDEN_NX2_ACQUIRE_PEEK");
-        if (value == nullptr) {
-            return Peek::Mode::Skip;
-        }
-        return Peek::ParseMode(value);
-    }();
+    static const Peek::Mode mode = Peek::ParseMode(std::getenv("EDEN_NX2_ACQUIRE_PEEK"));
     return mode;
 }
 

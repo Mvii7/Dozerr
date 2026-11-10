@@ -3149,7 +3149,8 @@ void BufferCache<P>::UpdateUniformBuffers(size_t stage) {
 }
 
 template <class P>
-bool BufferCache<P>::LightUniformRangesStay(const Nx2FastDraw::Delta& delta) const {
+BufferCache<P>::UniformRangeBlock BufferCache<P>::LightUniformRangeBlock(
+    const Nx2FastDraw::Delta& delta) const {
     const auto overlaps = [&](DAddr address, u32 size) {
         if (address == 0 || size == 0) {
             return false;
@@ -3163,31 +3164,43 @@ bool BufferCache<P>::LightUniformRangesStay(const Nx2FastDraw::Delta& delta) con
         return false;
     };
     for (size_t stage = 0; stage < NUM_STAGES; ++stage) {
-        if (channel_state->written_storage_buffers[stage] != 0 ||
-            channel_state->written_texture_buffers[stage] != 0) {
-            return false;
+        if (channel_state->written_storage_buffers[stage] != 0) {
+            return UniformRangeBlock::StorageFlag;
         }
-        bool touched = false;
+        if (channel_state->written_texture_buffers[stage] != 0) {
+            return UniformRangeBlock::TextureFlag;
+        }
+        UniformRangeBlock storage = UniformRangeBlock::None;
         ForEachEnabledBit(channel_state->enabled_storage_buffers[stage], [&](u32 index) {
+            if (storage != UniformRangeBlock::None) {
+                return;
+            }
             const Binding& binding = channel_state->storage_buffers[stage][index];
             if (binding.segment_count >= 2 ||
                 (binding.size != 0 && binding.buffer_id == NULL_BUFFER_ID) ||
                 overlaps(binding.device_addr, binding.size)) {
-                touched = true;
+                storage = UniformRangeBlock::StorageRange;
             }
         });
+        if (storage != UniformRangeBlock::None) {
+            return storage;
+        }
+        UniformRangeBlock texture = UniformRangeBlock::None;
         ForEachEnabledBit(channel_state->enabled_texture_buffers[stage], [&](u32 index) {
+            if (texture != UniformRangeBlock::None) {
+                return;
+            }
             const TextureBufferBinding& binding = channel_state->texture_buffers[stage][index];
             if ((binding.size != 0 && binding.buffer_id == NULL_BUFFER_ID) ||
                 overlaps(binding.device_addr, binding.size)) {
-                touched = true;
+                texture = UniformRangeBlock::TextureRange;
             }
         });
-        if (touched) {
-            return false;
+        if (texture != UniformRangeBlock::None) {
+            return texture;
         }
     }
-    return true;
+    return UniformRangeBlock::None;
 }
 
 template <class P>

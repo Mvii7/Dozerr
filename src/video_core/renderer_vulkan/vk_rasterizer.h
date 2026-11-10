@@ -465,6 +465,13 @@ private:
         u64 cb_sample{};
         u64 cb_sample_desc_stay{};
         u64 cb_sample_range_stay{};
+        /// One reason per constant-buffer refusal, in log order: a constant buffer moved and no
+        /// descriptor is read from it, a descriptor's constant buffer was bound again, storage
+        /// descriptor words written, texture or image descriptor words written, a descriptor is
+        /// not one direct word, a descriptor's buffer is unmapped, the shader writes a storage
+        /// buffer, the shader writes a texture buffer, a storage buffer's range overlaps the
+        /// write, a texture buffer's range overlaps the write, the uniform checks would pass.
+        std::array<u64, 11> uniform_block{};
         /// Maxwell3D::base_same_skips at the previous report.
         u64 base_same_cursor{};
         std::array<u64, static_cast<size_t>(LightRefusal::Count)> light_refused{};

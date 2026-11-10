@@ -625,17 +625,49 @@ bool RasterizerVulkan::TryLightDelta(GraphicsPipeline* pipeline, bool is_indexed
             if (probe.address_writes != 0) {
                 ++fast_draw_stats.cb_address_changed;
             }
-            // The uniform path's checks cost about a frame when they run on every draw (build 16
-            // took none of them). One in 32 says whether descriptors and buffer ranges would stay.
-            if (data && (fast_draw_stats.cb_data_only + fast_draw_stats.cb_both) % 32 == 1) {
-                ++fast_draw_stats.cb_sample;
-                if (pipeline->LightUniformDescriptorsStay(taken_delta)) {
-                    ++fast_draw_stats.cb_sample_desc_stay;
+            // Every refused draw, one reason. The uniform path stays off; this only records which
+            // of its checks would fail. The walk is what build 16 spent a frame on.
+            u32 block = 10;
+            using Word = GraphicsPipeline::UniformWordBlock;
+            switch (pipeline->LightUniformWordBlock(taken_delta)) {
+            case Word::SlotBound:
+                block = 1;
+                break;
+            case Word::StorageWords:
+                block = 2;
+                break;
+            case Word::HandleWords:
+                block = 3;
+                break;
+            case Word::Shape:
+                block = 4;
+                break;
+            case Word::Unmapped:
+                block = 5;
+                break;
+            case Word::None: {
+                using Range = decltype(buffer_cache)::UniformRangeBlock;
+                switch (buffer_cache.LightUniformRangeBlock(taken_delta)) {
+                case Range::StorageFlag:
+                    block = 6;
+                    break;
+                case Range::TextureFlag:
+                    block = 7;
+                    break;
+                case Range::StorageRange:
+                    block = 8;
+                    break;
+                case Range::TextureRange:
+                    block = 9;
+                    break;
+                case Range::None:
+                    block = binds ? 0 : 10;
+                    break;
                 }
-                if (buffer_cache.LightUniformRangesStay(taken_delta)) {
-                    ++fast_draw_stats.cb_sample_range_stay;
-                }
+                break;
             }
+            }
+            ++fast_draw_stats.uniform_block[block];
         }
         return false;
     }
@@ -752,16 +784,29 @@ void RasterizerVulkan::ReportFastDraws() {
                  static_cast<double>(stats.uniform_other) / seconds,
                  static_cast<double>(stats.uniform_buffers) / seconds);
         const auto per = [&](u64 count) { return static_cast<double>(count) / seconds; };
+        u64 uniform_sum = 0;
+        for (const u64 count : stats.uniform_block) {
+            uniform_sum += count;
+        }
+        const u64 cb_refusals = stats.cb_bind_only + stats.cb_data_only + stats.cb_both;
         LOG_INFO(Render_Vulkan,
                  "Constant buffer refusals per second: bind {:.0f}, data {:.0f}, both {:.0f} | "
                  "data whose bytes were already in memory {:.0f}, only base vertex and instance "
-                 "{:.0f}, other offset {:.0f}, address or size changed {:.0f} | uniform check 1/32: "
-                 "{:.0f} "
-                 "sampled, descriptors stay {:.0f}, ranges stay {:.0f}",
+                 "{:.0f}, other offset {:.0f}, address or size changed {:.0f}",
                  per(stats.cb_bind_only), per(stats.cb_data_only), per(stats.cb_both),
                  per(stats.cb_data_matched), per(stats.cb_data_640), per(stats.cb_data_other),
-                 per(stats.cb_address_changed), per(stats.cb_sample), per(stats.cb_sample_desc_stay),
-                 per(stats.cb_sample_range_stay));
+                 per(stats.cb_address_changed));
+        LOG_INFO(Render_Vulkan,
+                 "Uniform block per second: cbuf moved {:.0f}, descriptor slot rebound {:.0f}, "
+                 "storage descriptor words {:.0f}, handle words {:.0f}, descriptor shape {:.0f}, "
+                 "slot unmapped {:.0f}, storage written flag {:.0f}, texture written flag {:.0f}, "
+                 "storage range {:.0f}, texture range {:.0f}, checks would pass {:.0f} | sum {:.0f} "
+                 "of {:.0f} constant-buffer refusals",
+                 per(stats.uniform_block[0]), per(stats.uniform_block[1]), per(stats.uniform_block[2]),
+                 per(stats.uniform_block[3]), per(stats.uniform_block[4]), per(stats.uniform_block[5]),
+                 per(stats.uniform_block[6]), per(stats.uniform_block[7]), per(stats.uniform_block[8]),
+                 per(stats.uniform_block[9]), per(stats.uniform_block[10]), per(uniform_sum),
+                 per(cb_refusals));
         const u64 skips_now = maxwell3d->base_same_skips;
         LOG_INFO(Render_Vulkan,
                  "Base vertex and instance words not counted as a change: {:.0f}/s "
