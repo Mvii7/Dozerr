@@ -2655,6 +2655,7 @@ void BufferCache<P>::ResolveMultiRangeStorage(Binding& binding, bool is_written,
             (binding.gpu_addr >> 12) == ((binding.gpu_addr + binding.size - 1) >> 12)) {
             return;
         }
+        Nx2Profile::Scope multi_range_scope{Nx2Profile::Zone::BufMultiRange};
         const VirtualSegments* found =
             virtual_ranges.Query(*gpu_memory, binding.gpu_addr, binding.size);
         if (!found || found->size() < 2) {

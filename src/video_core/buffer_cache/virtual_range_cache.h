@@ -12,6 +12,7 @@
 #include <boost/container/small_vector.hpp>
 
 #include "common/common_types.h"
+#include "common/logging.h"
 #include "common/container/unordered_map.h"
 #include "video_core/memory_manager.h"
 
@@ -39,6 +40,14 @@ public:
         }
         if (entries.size() > MAX_ENTRIES) {
             entries.clear();
+            ++stats.clears;
+        }
+        if ((++stats.queries & ((u64{1} << 21) - 1)) == 0) {
+            LOG_INFO(HW_GPU,
+                     "Virtual range cache: {} queries, {} misses, {} deferred applies scanning {} "
+                     "entries x {} unmaps, {} clears, {} entries now",
+                     stats.queries, stats.misses, stats.applies, stats.scanned_entries,
+                     stats.scanned_unmaps, stats.clears, entries.size());
         }
         const size_t as_id = memory.GetID();
         const u64 key = MakeKey(as_id, gpu_addr);
@@ -52,6 +61,7 @@ public:
                 return &cached.segments;
             }
         }
+        ++stats.misses;
         Entry entry{};
         entry.as_id = as_id;
         entry.gpu_addr = gpu_addr;
@@ -150,6 +160,9 @@ private:
         if (pending.empty() || entries.empty()) {
             return;
         }
+        ++stats.applies;
+        stats.scanned_entries += entries.size();
+        stats.scanned_unmaps += pending.size();
         for (auto it = entries.begin(); it != entries.end();) {
             const Entry& entry = it->second;
             const GPUVAddr entry_end = entry.gpu_addr + entry.size;
@@ -170,6 +183,16 @@ private:
             }
         }
     }
+
+    /// Counts for the periodic log line (the back thread only).
+    struct Stats {
+        u64 queries{};
+        u64 misses{};
+        u64 applies{};
+        u64 scanned_entries{};
+        u64 scanned_unmaps{};
+        u64 clears{};
+    } stats;
 
     ::Common::unordered_map<u64, Entry> entries;
     std::vector<DeferredUnmap> deferred;
