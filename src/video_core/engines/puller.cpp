@@ -70,7 +70,7 @@ namespace Peek = VideoCommon::Nx2AcquirePeek;
 // Unset: on, so the heavy-spot run shows whether equal acquires guest memory already meets can
 // skip the drain. EDEN_NX2_ACQUIRE_PEEK=0 drains every equal acquire as before. =2 drains and
 // warns where skipping would have gone on and the word after the drain no longer meets it.
-static_assert(static_cast<size_t>(Peek::Verdict::Count) == 10);
+static_assert(static_cast<size_t>(Peek::Verdict::Count) == 9);
 static_assert(static_cast<size_t>(Peek::Verdict::Untracked) == 8);
 
 Peek::Mode PeekMode() {
@@ -159,7 +159,8 @@ u32 ReadGuestSemaphore(DmaPusher& dma_pusher, GPUVAddr address, DAddr device) {
 // can skip, and (=2) warn if skipping would have passed a word the drain then missed.
 void PeekAfterDrain(DmaPusher& dma_pusher, const Puller::PendingAcquire& acquire, u32 current) {
     if (PeekMode() == Peek::Mode::Off ||
-        static_cast<GpuSemaphoreOperation>(acquire.operation) != GpuSemaphoreOperation::AcquireEqual) {
+        static_cast<Puller::GpuSemaphoreOperation>(acquire.operation) !=
+            Puller::GpuSemaphoreOperation::AcquireEqual) {
         return;
     }
     if (const auto device = dma_pusher.memory_manager.GpuToCpuAddress(acquire.address)) {
@@ -194,7 +195,8 @@ AcquireCheck CheckWithoutDrain(DmaPusher& dma_pusher, const Puller::PendingAcqui
     auto& split = VideoCommon::GpuSplit::Get();
     auto& stats = VideoCommon::g_acquire_stats;
     const bool equal =
-        static_cast<GpuSemaphoreOperation>(acquire.operation) == GpuSemaphoreOperation::AcquireEqual;
+        static_cast<Puller::GpuSemaphoreOperation>(acquire.operation) ==
+        Puller::GpuSemaphoreOperation::AcquireEqual;
     const Peek::Mode peek = PeekMode();
     if (!acquire.WaitsToReach() && !(equal && peek != Peek::Mode::Off)) {
         VideoCommon::Count(stats.drain_operation);
