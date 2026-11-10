@@ -3198,6 +3198,23 @@ public:
     } root_tables;
 
 
+    /// EDEN_NX2_GPU_PROFILE. Constant-buffer traffic since the last recorded draw, read when a
+    /// light draw refuses because of it. `matched`: data writes whose bytes guest memory already
+    /// held. `base_words`: data writes at offset 0x640 or 0x644 (NVN's base vertex and instance).
+    /// `address_writes`: size or address registers that changed.
+    struct ConstBufferProbe {
+        u32 writes{};
+        u32 matched{};
+        u32 base_words{};
+        u32 other_offset{};
+        u32 address_writes{};
+
+        void Clear() {
+            *this = {};
+        }
+    };
+    ConstBufferProbe cb_probe{};
+
     /// Write the value to the register identified by method.
     void CallMethod(Core::System& system, u32 method, u32 method_argument, bool is_last_call) override;
 

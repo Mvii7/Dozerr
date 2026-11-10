@@ -559,6 +559,7 @@ void RasterizerVulkan::NoteResolvedDraw(GraphicsPipeline* pipeline, bool is_inde
         if (!VideoCommon::GpuSplit::OnBackThread()) return Ineligible::OffBackThread;
         return std::nullopt;
     }();
+    maxwell3d->cb_probe.Clear();
     if (ineligible) {
         ++fast_draw_stats.ineligible[static_cast<size_t>(*ineligible)];
         return;
@@ -601,6 +602,41 @@ bool RasterizerVulkan::TryLightDelta(GraphicsPipeline* pipeline, bool is_indexed
     // their written ranges marked each time.
     // Counted by TryLightUniform when that path does not take the draw either.
     if (!taken_delta.Empty()) {
+        if (VideoCommon::Nx2Profile::Enabled()) [[unlikely]] {
+            const auto& probe = maxwell3d->cb_probe;
+            const bool binds = (taken_delta.binds[0] | taken_delta.binds[1] | taken_delta.binds[2] |
+                                taken_delta.binds[3] | taken_delta.binds[4]) != 0;
+            const bool data = taken_delta.num_writes != 0;
+            if (binds && data) {
+                ++fast_draw_stats.cb_both;
+            } else if (binds) {
+                ++fast_draw_stats.cb_bind_only;
+            } else if (data) {
+                ++fast_draw_stats.cb_data_only;
+            }
+            if (data && probe.writes != 0 && probe.matched == probe.writes) {
+                ++fast_draw_stats.cb_data_matched;
+            }
+            if (data && probe.base_words != 0 && probe.other_offset == 0) {
+                ++fast_draw_stats.cb_data_640;
+            } else if (data && probe.other_offset != 0) {
+                ++fast_draw_stats.cb_data_other;
+            }
+            if (probe.address_writes != 0) {
+                ++fast_draw_stats.cb_address_changed;
+            }
+            // The uniform path's checks cost about a frame when they run on every draw (build 16
+            // took none of them). One in 32 says whether descriptors and buffer ranges would stay.
+            if (data && (fast_draw_stats.cb_data_only + fast_draw_stats.cb_both) % 32 == 1) {
+                ++fast_draw_stats.cb_sample;
+                if (pipeline->LightUniformDescriptorsStay(taken_delta)) {
+                    ++fast_draw_stats.cb_sample_desc_stay;
+                }
+                if (buffer_cache.LightUniformRangesStay(taken_delta)) {
+                    ++fast_draw_stats.cb_sample_range_stay;
+                }
+            }
+        }
         return false;
     }
     if (taken_draw.record_count != scheduler.RecordCount()) {
@@ -715,6 +751,17 @@ void RasterizerVulkan::ReportFastDraws() {
                  refused.empty() ? std::string{" none"} : refused,
                  static_cast<double>(stats.uniform_other) / seconds,
                  static_cast<double>(stats.uniform_buffers) / seconds);
+        const auto per = [&](u64 count) { return static_cast<double>(count) / seconds; };
+        LOG_INFO(Render_Vulkan,
+                 "Constant buffer refusals per second: bind {:.0f}, data {:.0f}, both {:.0f} | "
+                 "data whose bytes were already in memory {:.0f}, only base vertex and instance "
+                 "{:.0f}, other offset {:.0f}, address or size changed {:.0f} | uniform check 1/32: "
+                 "{:.0f} "
+                 "sampled, descriptors stay {:.0f}, ranges stay {:.0f}",
+                 per(stats.cb_bind_only), per(stats.cb_data_only), per(stats.cb_both),
+                 per(stats.cb_data_matched), per(stats.cb_data_640), per(stats.cb_data_other),
+                 per(stats.cb_address_changed), per(stats.cb_sample), per(stats.cb_sample_desc_stay),
+                 per(stats.cb_sample_range_stay));
     }
     static constexpr std::array<const char*, static_cast<size_t>(Ineligible::Count)>
         ineligible_names{"indirect",       "mesh",          "not built",     "writes images",

@@ -736,6 +736,12 @@ void Maxwell3D::CallMethodSlow(Core::System& system, u32 method, u32 method_argu
             VideoCommon::Nx2Profile::Add(VideoCommon::Nx2Profile::Counter::SameValueWrites, 1);
         }
         VideoCommon::Nx2Profile::CountMethod(method, same);
+        // Size and the two address words. A light draw keeps the buffer the last bind left, so a
+        // change here is why the next draw may not be able to.
+        if (!same && method >= MAXWELL3D_REG_INDEX(const_buffer.size) &&
+            method <= MAXWELL3D_REG_INDEX(const_buffer.address_low)) {
+            ++cb_probe.address_writes;
+        }
     }
     if (method == MAXWELL3D_REG_INDEX(shadow_ram_control) && front_macros) [[unlikely]] {
         back_control_writes[back_control_count++ % back_control_writes.size()] = {
@@ -1081,6 +1087,18 @@ void Maxwell3D::ProcessCBMultiData(const u32* start_base, u32 amount) {
     const size_t write_size = std::min(copy_size, room / sizeof(u32) * sizeof(u32));
     if (write_size != 0) {
         const GPUVAddr address{buffer_address + regs.const_buffer.offset};
+        if (VideoCommon::Nx2Profile::Enabled()) [[unlikely]] {
+            ++cb_probe.writes;
+            if (regs.const_buffer.offset == 0x640 || regs.const_buffer.offset == 0x644) {
+                ++cb_probe.base_words;
+            } else {
+                ++cb_probe.other_offset;
+            }
+            if (const u8* const bytes = memory_manager.GetSpan(address, write_size);
+                bytes != nullptr && std::memcmp(bytes, start_base, write_size) == 0) {
+                ++cb_probe.matched;
+            }
+        }
         if (VideoCommon::Nx2FastDraw::Enabled()) {
             NoteFastDrawConstantData(address, address + write_size);
         }

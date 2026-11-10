@@ -450,6 +450,21 @@ private:
         /// Of the constant-buffer refusals: another cached write, or storage/texture data.
         u64 uniform_other{};
         u64 uniform_buffers{};
+        /// Light refusals whose delta was a bind, data, or both (EDEN_NX2_GPU_PROFILE).
+        u64 cb_bind_only{};
+        u64 cb_data_only{};
+        u64 cb_both{};
+        /// Of data refusals: every written word already in guest memory; all of them the base
+        /// vertex and instance words (offsets 0x640 and 0x644); any at another offset; the size
+        /// or address register changed.
+        u64 cb_data_matched{};
+        u64 cb_data_640{};
+        u64 cb_data_other{};
+        u64 cb_address_changed{};
+        /// 1 in 32 data refusals: would the uniform path's descriptor and range checks have passed.
+        u64 cb_sample{};
+        u64 cb_sample_desc_stay{};
+        u64 cb_sample_range_stay{};
         std::array<u64, static_cast<size_t>(LightRefusal::Count)> light_refused{};
         std::array<u64, static_cast<size_t>(FullDraw::Count)> full{};
         std::array<u64, static_cast<size_t>(Ineligible::Count)> ineligible{};
