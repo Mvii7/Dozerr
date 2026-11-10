@@ -29,10 +29,11 @@ permissions:
 env:
   PGO_LLVM_VERSION: "23"
 
-# A running build is never cancelled: it finishes and publishes. A push meanwhile queues one build;
-# a later push replaces it, so the newest commit builds as soon as the running one is done.
+# Every commit builds on its own and in parallel with the others: the group is the commit, so a
+# push never waits for an earlier build and never replaces a queued one. A running build is never
+# cancelled.
 concurrency:
-  group: dozerr-test-builds-${{ github.ref }}
+  group: dozerr-test-builds-${{ github.sha }}
   cancel-in-progress: false
 
 jobs:
