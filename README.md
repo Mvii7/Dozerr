@@ -4,7 +4,7 @@
 -->
 
 <p align="center">
-  <img src="dist/dozerr/dozerr_banner.png" alt="Dozerr" width="600">
+  <img src="dist/dozerr/dozerr_banner_v2.png" alt="Dozerr" width="600">
 </p>
 
 # Dozerr

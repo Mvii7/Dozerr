@@ -5,7 +5,7 @@
 
 The source of dist/dozerr.ico, dist/dozerr.icns (the macOS app icon), dist/dozerr.bmp and
 dist/dozerr.png (the 256 px icon the Qt theme and the About box use) and
-dist/dozerr/dozerr_banner.png (the mark with the name, for the readme);
+dist/dozerr/dozerr_banner_v2.png (the mark with the name, for the readme);
 needs only Pillow:
     python dist/dozerr/dozerr_logo.py [output folder for a preview sheet]
 Drawn in a unit square at 8x and scaled down, so the edges stay smooth. 16 and 24 px leave out the
@@ -180,7 +180,7 @@ def main():
     icns_frames = [render(s) for s in (16, 32, 64, 128, 256, 512)]
     icns = os.path.join(DIST, 'dozerr.icns')
     icns_frames[-1].save(icns, format='ICNS', append_images=icns_frames[:-1])
-    banner = os.path.join(HERE, 'dozerr_banner.png')
+    banner = os.path.join(HERE, 'dozerr_banner_v2.png')
     render_banner().save(banner, optimize=True)
     print(banner)
     print(icns)
