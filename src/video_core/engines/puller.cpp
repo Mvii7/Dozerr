@@ -159,8 +159,7 @@ u32 ReadGuestSemaphore(DmaPusher& dma_pusher, GPUVAddr address, DAddr device) {
 // can skip, and (=2) warn if skipping would have passed a word the drain then missed.
 void PeekAfterDrain(DmaPusher& dma_pusher, const Puller::PendingAcquire& acquire, u32 current) {
     if (PeekMode() == Peek::Mode::Off ||
-        static_cast<Puller::GpuSemaphoreOperation>(acquire.operation) !=
-            Puller::GpuSemaphoreOperation::AcquireEqual) {
+        acquire.operation != Peek::OpEqual) {
         return;
     }
     if (const auto device = dma_pusher.memory_manager.GpuToCpuAddress(acquire.address)) {
@@ -194,9 +193,7 @@ void PeekAfterDrain(DmaPusher& dma_pusher, const Puller::PendingAcquire& acquire
 AcquireCheck CheckWithoutDrain(DmaPusher& dma_pusher, const Puller::PendingAcquire& acquire) {
     auto& split = VideoCommon::GpuSplit::Get();
     auto& stats = VideoCommon::g_acquire_stats;
-    const bool equal =
-        static_cast<Puller::GpuSemaphoreOperation>(acquire.operation) ==
-        Puller::GpuSemaphoreOperation::AcquireEqual;
+    const bool equal = acquire.operation == Peek::OpEqual;
     const Peek::Mode peek = PeekMode();
     if (!acquire.WaitsToReach() && !(equal && peek != Peek::Mode::Off)) {
         VideoCommon::Count(stats.drain_operation);
