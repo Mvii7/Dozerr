@@ -4,7 +4,8 @@
 """Dozerr's mark: a D whose flat edge is a bulldozer blade, with speed lines, on a dark tile.
 
 The source of dist/dozerr.ico, dist/dozerr.icns (the macOS app icon), dist/dozerr.bmp and
-dist/dozerr.png (the 256 px icon the Qt theme and the About box use);
+dist/dozerr.png (the 256 px icon the Qt theme and the About box use) and
+dist/dozerr/dozerr_banner.png (the mark with the name, for the readme);
 needs only Pillow:
     python dist/dozerr/dozerr_logo.py [output folder for a preview sheet]
 Drawn in a unit square at 8x and scaled down, so the edges stay smooth. 16 and 24 px leave out the
@@ -93,6 +94,53 @@ def render(size, simple=None, tile=True):
     return image.resize((size, size), Image.LANCZOS)
 
 
+FONT_CANDIDATES = (
+    'DejaVuSans-Bold.ttf', 'arialbd.ttf', 'Arial Bold.ttf', 'LiberationSans-Bold.ttf',
+    '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf',
+    '/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf',
+    'C:/Windows/Fonts/arialbd.ttf', '/System/Library/Fonts/Supplemental/Arial Bold.ttf',
+)
+
+
+def load_font(size):
+    from PIL import ImageFont
+    for name in FONT_CANDIDATES:
+        try:
+            return ImageFont.truetype(name, size)
+        except OSError:
+            continue
+    return ImageFont.load_default()
+
+
+def render_banner(width=1600, height=400):
+    """The mark with the name beside it, on a dark panel that reads on light and dark pages."""
+    scale = 2
+    w, h = width * scale, height * scale
+    panel = Image.new('RGBA', (w, h), (0, 0, 0, 0))
+    gradient = Image.new('RGBA', (w, h))
+    px = gradient.load()
+    for y in range(h):
+        t = y / (h - 1)
+        color = tuple(round(TILE_TOP[i] + (TILE_BOTTOM[i] - TILE_TOP[i]) * t) for i in range(3))
+        for x in range(w):
+            px[x, y] = color + (255,)
+    mask = Image.new('L', (w, h), 0)
+    ImageDraw.Draw(mask).rounded_rectangle((0, 0, w - 1, h - 1), radius=int(h * 0.16), fill=255)
+    panel.paste(gradient, (0, 0), mask)
+    icon_size = int(h * 0.72)
+    icon = render(256).resize((icon_size, icon_size), Image.LANCZOS)
+    left = int(h * 0.14)
+    panel.alpha_composite(icon, (left, (h - icon_size) // 2))
+    draw = ImageDraw.Draw(panel)
+    font = load_font(int(h * 0.46))
+    text = 'Dozerr'
+    box = draw.textbbox((0, 0), text, font=font)
+    text_x = left + icon_size + int(h * 0.10)
+    text_y = (h - (box[3] - box[1])) // 2 - box[1]
+    draw.text((text_x, text_y), text, font=font, fill=YELLOW)
+    return panel.resize((width, height), Image.LANCZOS)
+
+
 def write_bmp(image, path):
     """32-bit BI_RGB bottom-up BMP with alpha in the fourth byte, like dist/eden.bmp (the CLI's
     SDL window icon, compiled in by yuzu_cmd's CMakeLists)."""
@@ -124,6 +172,9 @@ def main():
     icns_frames = [render(s) for s in (16, 32, 64, 128, 256, 512)]
     icns = os.path.join(DIST, 'dozerr.icns')
     icns_frames[-1].save(icns, format='ICNS', append_images=icns_frames[:-1])
+    banner = os.path.join(HERE, 'dozerr_banner.png')
+    render_banner().save(banner, optimize=True)
+    print(banner)
     print(icns)
     print(ico)
     print(png)

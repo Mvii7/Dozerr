@@ -1,13 +1,13 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <component type="desktop-application">
-  <id>io.github.zortos293.lichii</id>
+  <id>io.github.mvii7.dozerr</id>
   <metadata_license>CC0-1.0</metadata_license>
   <name>Dozerr</name>
   <summary>Experimental Nintendo Switch and Switch 2 emulator</summary>
   <description>
     <p>Dozerr is a Nintendo Switch 2 emulator tuned for Donkey Kong Bananza, forked from Lichii, which is based on Eglantine and Eden, with work inherited from yuzu and Sudachi. Compatibility and performance vary by game and hardware.</p>
   </description>
-  <launchable type="desktop-id">io.github.zortos293.lichii.desktop</launchable>
+  <launchable type="desktop-id">io.github.mvii7.dozerr.desktop</launchable>
   <provides><binary>dozerr</binary></provides>
   <categories><category>Game</category><category>Emulator</category></categories>
   <url type="homepage">https://github.com/Mvii7/Dozerr</url>

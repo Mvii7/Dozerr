@@ -28,7 +28,6 @@
 #include "qt_common/config/qt_config.h"
 #include "qt_common/qt_common.h"
 #include "qt_common/util/game.h"
-#include "yuzu/compatibility_report.h"
 #include "yuzu/hotkeys.h"
 #include "yuzu/user_data_migration.h"
 
@@ -347,7 +346,6 @@ private slots:
     void OnPauseContinueGame();
     void OnStopGame();
     void OnPrepareForSleep(bool prepare_sleep);
-    void OnMenuReportCompatibility();
     void OnOpenModsPage();
     void OnOpenUserHandbook();
 
@@ -569,7 +567,6 @@ private:
 
     // Whether emulation is currently running in yuzu.
     bool emulation_running = false;
-    std::optional<CompatibilityReporting::Session> report_session;
     bool boot_in_progress = false;
     bool close_pending = false;
     // The path to the game currently running

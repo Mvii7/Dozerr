@@ -1,12 +1,12 @@
-name: dozer-test-builds
+name: dozerr-test-builds
 
 on:
   workflow_dispatch:
-  # Dozer: test builds of dozer-* branches. Artifacts only, never a release (release-binaries.yml
+  # Dozerr: test builds of dozerr-* branches. Artifacts only, never a release (release-binaries.yml
   # still publishes Dozerr-style releases from nx2-experimental or a manual run).
   push:
     branches:
-      - "dozer-*"
+      - "dozerr-*"
     paths:
       - "src/**"
       - "!src/tests/**"
@@ -18,7 +18,7 @@ on:
       - ".patch/**"
       - "cpmfile.json"
       - "*.profdata"
-      - ".github/workflows/dozer-test-builds.yml"
+      - ".github/workflows/dozerr-test-builds.yml"
 
 permissions:
   contents: read
@@ -32,7 +32,7 @@ env:
 # A running build is never cancelled: it finishes and publishes. A push meanwhile queues one build;
 # a later push replaces it, so the newest commit builds as soon as the running one is done.
 concurrency:
-  group: dozer-test-builds-${{ github.ref }}
+  group: dozerr-test-builds-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
@@ -368,8 +368,8 @@ jobs:
           curl -fsSL -o "$tools/linuxdeploy-plugin-qt-$arch.AppImage" \
           https://github.com/linuxdeploy/linuxdeploy-plugin-qt/releases/download/continuous/linuxdeploy-plugin-qt-$arch.AppImage
           chmod +x "$tools"/*.AppImage
-          # The desktop file names its icon io.github.zortos293.lichii.
-          icon="$RUNNER_TEMP/io.github.zortos293.lichii.png"
+          # The desktop file names its icon io.github.mvii7.dozerr.
+          icon="$RUNNER_TEMP/io.github.mvii7.dozerr.png"
           cp dist/dozerr.png "$icon"
           export APPIMAGE_EXTRACT_AND_RUN=1
           export QMAKE="$QT_ROOT_DIR/bin/qmake"
@@ -386,7 +386,7 @@ jobs:
           "$tools/linuxdeploy-$arch.AppImage" --appdir AppDir \
             --executable build/release/bin/dozerr \
             --executable build/release/bin/dozerr-cli \
-            --desktop-file dist/io.github.zortos293.lichii.desktop \
+            --desktop-file dist/io.github.mvii7.dozerr.desktop \
             --icon-file "$icon" \
             --plugin qt \
             --output appimage

@@ -1498,14 +1498,6 @@ void MainWindow::OnAppFocusStateChanged(Qt::ApplicationState state) {
 }
 
 void MainWindow::ConnectWidgetEvents() {
-    connect(game_list, &GameList::ReportCompatibilityRequested, this, [this](u64 program_id) {
-        if (!report_session || report_session->program_id != program_id || emulation_running ||
-            boot_in_progress || close_pending) {
-            return;
-        }
-        CompatibilityReporting::Dialog dialog(*report_session, this);
-        dialog.exec();
-    });
     connect(game_list, &GameList::BootGame, this, &MainWindow::BootGameFromList);
     connect(game_list, &GameList::GameChosen, this, &MainWindow::OnGameListLoadFile);
     connect(game_list, &GameList::OpenDirectory, this, &MainWindow::OnGameListOpenDirectory);
@@ -2088,8 +2080,6 @@ void MainWindow::BootGame(const QString& filename, Service::AM::FrontendAppletPa
         return;
     }
     LOG_INFO(Frontend, "Dozerr starting...");
-    report_session.reset();
-    game_list->SetReportableProgramId(0);
 
     if (params.program_id == 0 ||
         params.program_id > static_cast<u64>(Service::AM::AppletProgramId::MaxProgramId)) {
@@ -2200,80 +2190,6 @@ void MainWindow::BootGame(const QString& filename, Service::AM::FrontendAppletPa
         return;
     }
     LOG_INFO(Frontend, "Core load completed: elapsed_ms={}", load_timer.elapsed());
-
-    const auto report_program_id = QtCommon::system->GetApplicationProcessProgramID();
-    if (Settings::CurrentProgramIsSwitch2() && report_program_id != 0) {
-        auto& session = report_session.emplace();
-        session.program_id = report_program_id;
-        const FileSys::PatchManager pm(report_program_id,
-                                       QtCommon::system->GetFileSystemController(),
-                                       QtCommon::system->GetContentProvider());
-        if (const auto metadata = pm.GetControlMetadata(); metadata.first) {
-            session.title = QString::fromStdString(metadata.first->GetApplicationName());
-            session.game_version = QString::fromStdString(metadata.first->GetVersionString());
-        }
-        if (session.title.trimmed().isEmpty()) {
-            std::string title;
-            if (QtCommon::system->GetGameName(title) == Loader::ResultStatus::Success) {
-                session.title = QString::fromStdString(title);
-            }
-        }
-        FileSys::VirtualFile update_raw;
-        auto& report_loader = QtCommon::system->GetAppLoader();
-        report_loader.ReadUpdateRaw(update_raw);
-        QList<CompatibilityReporting::Addon> mods;
-        QList<CompatibilityReporting::Addon> updates;
-        for (const auto& patch : pm.GetPatches(update_raw)) {
-            auto* entries = patch.type == FileSys::PatchType::Mod      ? &mods
-                            : patch.type == FileSys::PatchType::Update ? &updates
-                                                                       : nullptr;
-            if (entries) {
-                entries->push_back({QString::fromStdString(patch.name),
-                                    QString::fromStdString(patch.version), patch.enabled});
-            }
-        }
-        if (report_loader.GetFileType() == Loader::FileType::NUP) {
-            std::string version;
-            if (report_loader.ReadDisplayVersion(version) == Loader::ResultStatus::Success &&
-                !version.empty()) {
-                session.game_version = QString::fromStdString(version);
-                updates.push_back(
-                    {QStringLiteral("Loaded NUP package"), session.game_version, true});
-            }
-        }
-        session.mods = CompatibilityReporting::SummarizeEnabledAddons(mods);
-        session.updates = CompatibilityReporting::SummarizeEnabledAddons(updates);
-        session.build = QStringLiteral("Dozerr %1 (%2)")
-                            .arg(QString::fromUtf8(Common::g_build_version),
-                                 QString::fromUtf8(Common::g_scm_rev).left(12));
-#ifdef ARCHITECTURE_x86_64
-        session.cpu = QString::fromLatin1(Common::g_cpu_caps.cpu_string,
-                                          sizeof(Common::g_cpu_caps.cpu_string))
-                          .section(QChar{}, 0, 0)
-                          .trimmed();
-#endif
-        session.os = QSysInfo::prettyProductName();
-        const auto memory = Common::GetMemInfo().TotalPhysicalMemory;
-        if (memory != 0) {
-            session.ram =
-                QStringLiteral("%1 GiB").arg(double(memory) / (1024 * 1024 * 1024), 0, 'f', 1);
-        }
-        const auto& device_info = QtCommon::system->Renderer().GetDeviceInfo();
-        session.gpu = QString::fromStdString(device_info.model);
-        session.driver = QString::fromStdString(device_info.driver);
-        session.graphics_api = QString::fromStdString(device_info.api);
-        session.settings =
-            QStringLiteral("Launch settings: %1 mode; resolution scale %2x; "
-                           "GPU accuracy %3; asynchronous shaders %4.")
-                .arg(Settings::IsDockedMode() ? QStringLiteral("Docked")
-                                              : QStringLiteral("Handheld"))
-                .arg(Settings::values.resolution_info.up_factor)
-                .arg(Settings::values.gpu_accuracy.GetValue() == Settings::GpuAccuracy::High
-                         ? QStringLiteral("High")
-                         : QStringLiteral("Low"))
-                .arg(Settings::values.use_asynchronous_shaders.GetValue() ? QStringLiteral("on")
-                                                                          : QStringLiteral("off"));
-    }
 
     QtCommon::system->SetShuttingDown(false);
     game_list->setDisabled(true);
@@ -2509,8 +2425,6 @@ void MainWindow::OnEmulationStopped() {
     }
 
     emulation_running = false;
-
-    game_list->SetReportableProgramId(report_session ? report_session->program_id : 0);
 
     discord_rpc->Update();
     Common::FeralGamemode::Stop();
@@ -3525,48 +3439,6 @@ void MainWindow::ErrorDisplayRequestExit() {
     if (error_applet) {
         error_applet->reject();
     }
-}
-
-void MainWindow::OnMenuReportCompatibility() {
-    QtCommon::Frontend::Critical(
-        tr("Function Disabled"),
-        tr("Compatibility list reporting is currently disabled. Check back later!"));
-
-    // #if defined(ARCHITECTURE_x86_64) && !defined(__APPLE__)
-    //     const auto& caps = g_cpu_caps;
-    //     const bool has_fma = caps.fma;
-    //     const auto processor_count = std::thread::hardware_concurrency();
-    //     const bool has_4threads = processor_count == 0 || processor_count >= 4;
-    //     const bool has_8gb_ram = Common::GetMemInfo().TotalPhysicalMemory >= 8_GiB;
-    //     const bool has_broken_vulkan = UISettings::values.has_broken_vulkan;
-
-    //     if (!has_fma || !has_4threads || !has_8gb_ram || has_broken_vulkan) {
-    //         QMessageBox::critical(this, tr("Hardware requirements not met"),
-    //                               tr("Your system does not meet the recommended hardware
-    //                               requirements. "
-    //                                  "Compatibility reporting has been disabled."));
-    //         return;
-    //     }
-
-    //     if (!Settings::values.eden_token.GetValue().empty() &&
-    //         !Settings::values.eden_username.GetValue().empty()) {
-    //     } else {
-    //         QMessageBox::critical(
-    //             this, tr("Missing yuzu Account"),
-    //             tr("In order to submit a game compatibility test case, you must set up your web
-    //             token "
-    //                "and "
-    //                "username.<br><br/>To link your eden account, go to Emulation &gt;
-    //                Configuration "
-    //                "&gt; "
-    //                "Web."));
-    //     }
-    // #else
-    //     QMessageBox::critical(this, tr("Hardware requirements not met"),
-    //                           tr("Your system does not meet the recommended hardware
-    //                           requirements. "
-    //                              "Compatibility reporting has been disabled."));
-    // #endif
 }
 
 void MainWindow::OpenURL(const QUrl& url) {
@@ -5011,11 +4883,6 @@ void MainWindow::OnEmulatorUpdateAvailable() {
 void MainWindow::OnApplicationChanged(u64 program_id) {
     if (!emulation_running || program_id == 0)
         return;
-
-    if (report_session && report_session->program_id != program_id) {
-        report_session.reset();
-        game_list->SetReportableProgramId(0);
-    }
 
     std::string title_name;
     std::string title_version;
