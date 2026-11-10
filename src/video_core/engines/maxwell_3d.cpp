@@ -2268,11 +2268,18 @@ void Maxwell3D::FrontIndirectDraw(Core::System& system, VideoCommon::GpuSplit& s
                                   FrontState& fs, GPUVAddr record) {
     static std::atomic<u64> draws{};
     static std::atomic<u64> merged{};
+    static std::atomic<u64> blocked_published{};
+    static std::atomic<u64> blocked_between{};
+    static std::atomic<u64> blocked_records{};
     const u64 count_so_far = draws.fetch_add(1, std::memory_order_relaxed) + 1;
     if ((count_so_far & (count_so_far - 1)) == 0 && count_so_far >= 1024) {
         LOG_INFO(HW_GPU,
-                 "HLE indirect draws: {} so far, {} joined the call before them (one host draw)",
-                 count_so_far, merged.load(std::memory_order_relaxed));
+                 "HLE indirect draws: {} so far, {} joined the call before them | not joined: "
+                 "published {}, something between {}, record {}",
+                 count_so_far, merged.load(std::memory_order_relaxed),
+                 blocked_published.load(std::memory_order_relaxed),
+                 blocked_between.load(std::memory_order_relaxed),
+                 blocked_records.load(std::memory_order_relaxed));
     }
     const u32 topology = fs.parameters[0];
     fs.draw_pending = false;
@@ -2302,6 +2309,13 @@ void Maxwell3D::FrontIndirectDraw(Core::System& system, VideoCommon::GpuSplit& s
             std::memcpy(held.payload, &call, sizeof(call));
             merged.fetch_add(1, std::memory_order_relaxed);
             return;
+        }
+        blocked_records.fetch_add(1, std::memory_order_relaxed);
+    } else if (held.payload != nullptr && IndirectBatchEnabled()) {
+        if (held.session != split.Session() || split.Published(held.start)) {
+            blocked_published.fetch_add(1, std::memory_order_relaxed);
+        } else {
+            blocked_between.fetch_add(1, std::memory_order_relaxed);
         }
     }
     held = {};

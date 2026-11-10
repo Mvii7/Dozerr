@@ -487,8 +487,8 @@ private:
     /// draw). False when it must set up in full; what it bound then stays valid.
     [[nodiscard]] bool TryLightDelta(GraphicsPipeline* pipeline, bool is_indexed, u64 cpu_epoch);
     /// A delta draw whose only extra change is constant-buffer data that does not touch storage
-    /// or texture buffers: ConfigureDelta without reading or synchronizing those buffers
-    /// (EDEN_NX2_LIGHT_UNIFORM). `epoch_before_flush` is the CPU-set epoch before this draw's
+    /// or texture buffers: ConfigureDelta without reading or synchronizing those buffers.
+    /// Off unless EDEN_NX2_LIGHT_UNIFORM=1. `epoch_before_flush` is the CPU-set epoch before this draw's
     /// FlushCaching. NotTaken falls through to ConfigureDelta; Failed means that call failed.
     enum class LightUniformAttempt : u8 { NotTaken, Configured, Failed };
     [[nodiscard]] LightUniformAttempt TryLightUniform(GraphicsPipeline* pipeline, bool is_indexed,

@@ -237,7 +237,11 @@ bool DmaPusher::Step() {
                             ->FrontTakeIndirectRecord(system, VideoCommon::GpuSplit::Get(),
                                                       dma_state.method, dma_state.dma_get);
                 }
-                if (auto& split = VideoCommon::GpuSplit::Get(); split.Active()) {
+                if (indirect_record) {
+                    // The macro does not run on the back, so nothing there reads current_dirty.
+                    // Queuing the check anyway is a call between these draws, and
+                    // FrontIndirectDraw then cannot merge the next record into the previous one.
+                } else if (auto& split = VideoCommon::GpuSplit::Get(); split.Active()) {
                     // The caches behind IsMemoryDirty belong to the split's back thread.
                     split.Defer([engine_state, memory = &memory_manager, address = GPUVAddr{dma_state.dma_get},
                                  bytes = words * sizeof(u32)] {

@@ -630,9 +630,11 @@ bool RasterizerVulkan::TryLightDelta(GraphicsPipeline* pipeline, bool is_indexed
 
 RasterizerVulkan::LightUniformAttempt RasterizerVulkan::TryLightUniform(
     GraphicsPipeline* pipeline, bool is_indexed, u64 epoch_before_flush) {
+    // Build 16 took this on 0 of ~187k candidate draws a second and spent the check on the rest.
+    // EDEN_NX2_LIGHT_UNIFORM=1 turns it back on.
     static const bool enabled = [] {
         const char* value = std::getenv("EDEN_NX2_LIGHT_UNIFORM");
-        return value == nullptr || value[0] != '0';
+        return value != nullptr && value[0] == '1';
     }();
     const auto refuse = [&](bool buffers) {
         ++fast_draw_stats.light_refused[static_cast<size_t>(LightRefusal::DeltaBinds)];
