@@ -2235,19 +2235,6 @@ void Maxwell3D::FrontVerify(VideoCommon::GpuSplit& split, FrontState& fs) {
     }
 }
 
-bool Maxwell3D::FrontIndirectMacro(u32 method) const {
-    if (front == nullptr || method < MacroRegistersStart || !HleIndirectEnabled()) {
-        return false;
-    }
-    const u32* const positions = native_macro_context != nullptr
-                                     ? native_macro_context->positions.data()
-                                     : macro_positions.data();
-    const u32 start = positions[((method - MacroRegistersStart) >> 1) % macro_positions.size()];
-    const auto it = front->indirect_checks.find(start);
-    return it != front->indirect_checks.end() && !it->second.failed &&
-           it->second.matches >= FrontState::IndirectCheck::Needed;
-}
-
 bool Maxwell3D::FrontTakeIndirectRecord(Core::System& system, VideoCommon::GpuSplit& split,
                                         u32 method, GPUVAddr record) {
     // Donkey Kong Bananza draws its terrain with NVN's indexed indirect draw macro: a culling

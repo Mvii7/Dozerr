@@ -237,23 +237,34 @@ bool DmaPusher::Step() {
                             ->FrontTakeIndirectRecord(system, VideoCommon::GpuSplit::Get(),
                                                       dma_state.method, dma_state.dma_get);
                 }
-                // The record entry is 5 words. The topology word before it is its own entry, and
-                // queuing current_dirty there sits between two draws, so they cannot merge.
-                // Neither word is read by a macro on the back once the draw is taken.
-                const bool indirect_parameters =
-                    indirect_record ||
-                    (macro_payload && words != 5 &&
-                     static_cast<Engines::Maxwell3D*>(engine_state)->FrontIndirectMacro(
-                         dma_state.method));
-                if (indirect_parameters) {
-                } else if (auto& split = VideoCommon::GpuSplit::Get(); split.Active()) {
-                    // The caches behind IsMemoryDirty belong to the split's back thread.
-                    split.Defer([engine_state, memory = &memory_manager, address = GPUVAddr{dma_state.dma_get},
-                                 bytes = words * sizeof(u32)] {
-                        engine_state->current_dirty = memory->IsMemoryDirty(address, bytes);
-                    }, VideoCommon::GpuSplit::FastDrawNeutral);
-                } else {
-                    engine_state->current_dirty = memory_manager.IsMemoryDirty(dma_state.dma_get, words * sizeof(u32));
+                // Anka ad89926d7: a parameter block continued in its own entry deferred
+                // IsMemoryDirty onto the back, tens of thousands a second on the way into
+                // Bananza's indirect draws. With front macros, CallMethod hands those words to
+                // FrontCallMethod. ProcessMacro on the back is what reads current_dirty, and it
+                // never sees them. EDEN_NX2_DIRTY_THUNK_SKIP=0 sends the thunk as before.
+                // KeplerCompute blocks, and Maxwell3D while the macros stay on the back, keep it.
+                static const bool skip_front_macros = [] {
+                    const char* value = std::getenv("EDEN_NX2_DIRTY_THUNK_SKIP");
+                    return value == nullptr || value[0] != '0';
+                }();
+                const bool front_macro =
+                    skip_front_macros && macro_payload &&
+                    VideoCommon::GpuSplit::Get().FrontMacros() &&
+                    static_cast<Engines::Maxwell3D*>(engine_state)
+                        ->GetNativeMacroEngine()
+                        .native_turing;
+                if (!front_macro) {
+                    if (auto& split = VideoCommon::GpuSplit::Get(); split.Active()) {
+                        // The caches behind IsMemoryDirty belong to the split's back thread.
+                        split.Defer([engine_state, memory = &memory_manager,
+                                     address = GPUVAddr{dma_state.dma_get},
+                                     bytes = words * sizeof(u32)] {
+                            engine_state->current_dirty = memory->IsMemoryDirty(address, bytes);
+                        }, VideoCommon::GpuSplit::FastDrawNeutral);
+                    } else {
+                        engine_state->current_dirty = memory_manager.IsMemoryDirty(
+                            dma_state.dma_get, words * sizeof(u32));
+                    }
                 }
             }
         }

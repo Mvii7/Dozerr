@@ -3222,9 +3222,6 @@ public:
     /// the GPU reads the record itself (BackDrawIndexedIndirect) and nothing waits for it.
     [[nodiscard]] bool FrontTakeIndirectRecord(Core::System& system, VideoCommon::GpuSplit& split,
                                                u32 method, GPUVAddr record);
-    /// The macro at `method` is NVN's indexed indirect draw, confirmed on its first calls. Its
-    /// parameter words are not read by a macro on the back.
-    [[nodiscard]] bool FrontIndirectMacro(u32 method) const;
 
     bool ShouldExecute() const {
         return execute_on;
