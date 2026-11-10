@@ -28,7 +28,9 @@ using VirtualSegments = boost::container::small_vector<VirtualSegment, 8>;
 
 class VirtualRangeCache {
 public:
-    static constexpr size_t MAX_ENTRIES = 8192;
+    // Bananza's heavy areas bind more than 8192 distinct storage ranges a frame; with that
+    // limit the cache cleared itself about 11 times a second and nearly every query missed.
+    static constexpr size_t MAX_ENTRIES = 65536;
     static constexpr size_t MAX_DEFERRED = 4096;
 
     /// The segments of a range when it has more than one. Fewer than two means that it needs no
@@ -42,7 +44,7 @@ public:
             entries.clear();
             ++stats.clears;
         }
-        if ((++stats.queries & ((u64{1} << 21) - 1)) == 0) {
+        if ((++stats.queries & ((u64{1} << 24) - 1)) == 0) {
             LOG_INFO(HW_GPU,
                      "Virtual range cache: {} queries, {} misses, {} deferred applies scanning {} "
                      "entries x {} unmaps, {} clears, {} entries now",
