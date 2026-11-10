@@ -237,10 +237,15 @@ bool DmaPusher::Step() {
                             ->FrontTakeIndirectRecord(system, VideoCommon::GpuSplit::Get(),
                                                       dma_state.method, dma_state.dma_get);
                 }
-                if (indirect_record) {
-                    // The macro does not run on the back, so nothing there reads current_dirty.
-                    // Queuing the check anyway is a call between these draws, and
-                    // FrontIndirectDraw then cannot merge the next record into the previous one.
+                // The record entry is 5 words. The topology word before it is its own entry, and
+                // queuing current_dirty there sits between two draws, so they cannot merge.
+                // Neither word is read by a macro on the back once the draw is taken.
+                const bool indirect_parameters =
+                    indirect_record ||
+                    (macro_payload && words != 5 &&
+                     static_cast<Engines::Maxwell3D*>(engine_state)->FrontIndirectMacro(
+                         dma_state.method));
+                if (indirect_parameters) {
                 } else if (auto& split = VideoCommon::GpuSplit::Get(); split.Active()) {
                     // The caches behind IsMemoryDirty belong to the split's back thread.
                     split.Defer([engine_state, memory = &memory_manager, address = GPUVAddr{dma_state.dma_get},
