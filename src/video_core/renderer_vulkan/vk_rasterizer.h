@@ -393,6 +393,7 @@ private:
         u64 render_pass{};
         Maxwell::PrimitiveTopology topology{};
         bool is_indexed{};
+        bool is_indirect{}; ///< An HLE indirect draw (IndirectFastDrawable): reused by the same kind
     };
     enum class FullDraw : u8 {
         NoCandidate,
@@ -444,6 +445,10 @@ private:
     /// The pipeline the draw can take the delta path with, or null for a full resolve. Clears
     /// the remembered draw either way: only a recorded draw remembers one again.
     GraphicsPipeline* TakeReusableDraw(bool is_indexed, bool is_indirect);
+    /// Whether the draw being set up is an indirect draw that fast draws may reuse: the indexed
+    /// indirect draw NVN's macro makes (Maxwell3D::BackDrawIndexedIndirect), with no count and
+    /// no byte count. EDEN_NX2_FAST_DRAW_INDIRECT=0 keeps every indirect draw a full resolve.
+    [[nodiscard]] bool IndirectFastDrawable(bool is_indirect) const;
     /// Whether the draw TakeReusableDraw took still holds once the caches are locked (serial and
     /// map_serial as read then), and the images it samples need no preparing.
     bool DeltaStillHolds(u64 serial, u64 map_serial);

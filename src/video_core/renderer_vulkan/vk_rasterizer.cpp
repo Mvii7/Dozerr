@@ -436,6 +436,18 @@ RasterizerVulkan::~RasterizerVulkan() {
     scheduler.Finish();
 }
 
+bool RasterizerVulkan::IndirectFastDrawable(bool is_indirect) const {
+    static const bool enabled = [] {
+        const char* value = std::getenv("EDEN_NX2_FAST_DRAW_INDIRECT");
+        return value == nullptr || value[0] != '0';
+    }();
+    if (!is_indirect) {
+        return true;
+    }
+    const auto& indirect = maxwell3d->draw_manager.indirect_state;
+    return enabled && indirect.is_indexed && !indirect.include_count && !indirect.is_byte_count;
+}
+
 GraphicsPipeline* RasterizerVulkan::TakeReusableDraw(bool is_indexed, bool is_indirect) {
     namespace FastDraw = VideoCommon::Nx2FastDraw;
     const ReusableDraw draw = std::exchange(reusable_draw, ReusableDraw{});
@@ -449,7 +461,8 @@ GraphicsPipeline* RasterizerVulkan::TakeReusableDraw(bool is_indexed, bool is_in
         return full(FullDraw::NoCandidate);
     }
     const auto& draw_state = maxwell3d->draw_manager.draw_state;
-    if (is_indirect || draw.is_indexed != is_indexed || draw.maxwell3d != maxwell3d ||
+    if (!IndirectFastDrawable(is_indirect) || draw.is_indirect != is_indirect ||
+        draw.is_indexed != is_indexed || draw.maxwell3d != maxwell3d ||
         draw.topology != draw_state.topology || !draw_state.inline_index_draw_indexes.empty() ||
         frame_dump.Capturing()) {
         return full(FullDraw::Kind);
@@ -529,7 +542,7 @@ void RasterizerVulkan::NoteResolvedDraw(GraphicsPipeline* pipeline, bool is_inde
     const auto& draw_state = maxwell3d->draw_manager.draw_state;
     const auto topology = draw_state.topology;
     const auto ineligible = [&]() -> std::optional<Ineligible> {
-        if (is_indirect) return Ineligible::Indirect;
+        if (!IndirectFastDrawable(is_indirect)) return Ineligible::Indirect;
         if (mesh_draw) return Ineligible::Mesh;
         if (!pipeline->IsBuilt()) return Ineligible::NotBuilt;
         if (pipeline->WritesImages()) return Ineligible::WritesImages;
@@ -558,6 +571,7 @@ void RasterizerVulkan::NoteResolvedDraw(GraphicsPipeline* pipeline, bool is_inde
         .render_pass = scheduler.RenderPassSerial(),
         .topology = topology,
         .is_indexed = is_indexed,
+        .is_indirect = is_indirect,
     };
 }
 

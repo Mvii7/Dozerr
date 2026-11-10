@@ -24,3 +24,14 @@ HLE draws at powers of two from 1024.
 - **Far terrain stripes** (`EDEN_NX2_BLIT_NATIVE_TILING=0` turns it off): the software 2D blit untiled and
   tiled small mip copies in the Tegra X1 GOB order on Switch 2 titles; it now passes the native
   tiling flag the DMA and texture paths already use (from Orchid `6a1bd310`).
+
+## Fast draws for HLE indirect draws
+
+Lichii's fast draw path (`nx2_fast_draw.h`, the delta path) used to treat every indirect draw as
+ineligible, so each HLE terrain draw took a full resolve and the draw after it did too. The indexed
+indirect draw `BackDrawIndexedIndirect` makes (no count, no byte count) can now be reused by the
+next draw of the same kind and pipeline (`RasterizerVulkan::IndirectFastDrawable`; reuse only
+between indirect draws, because the HLE replacement attributes are part of the pipeline).
+`EDEN_NX2_FAST_DRAW_INDIRECT=0` keeps every indirect draw a full resolve. With
+`EDEN_NX2_GPU_PROFILE=1` the `Fast draw per second` lines show the effect (the `indirect`
+ineligible count should drop to 0, and delta draws rise).
