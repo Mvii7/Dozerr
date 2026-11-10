@@ -7,6 +7,7 @@
 #pragma once
 
 #include <algorithm>
+#include <atomic>
 #include <array>
 #include <bit>
 #include <deque>
@@ -71,8 +72,16 @@ public:
         });
     }
 
+    /// Changes whenever a call may set a CPU, CachedCPU or Untracked bit (MarkRegionAsCpuModified,
+    /// CachedCpuWrite, FlushCachedWrites, a new region): while it is the same, a range whose
+    /// pages held none holds none still (ported from Dozer's SYNC_MEMO epoch). Any thread.
+    [[nodiscard]] u64 CpuSetEpoch() const noexcept {
+        return cpu_set_epoch.load(std::memory_order_acquire);
+    }
+
     /// Mark region as CPU modified, notifying the device_tracker about this change
     void MarkRegionAsCpuModified(VAddr dirty_cpu_addr, u64 query_size) {
+        cpu_set_epoch.fetch_add(1, std::memory_order_acq_rel);
         ForgetSynchronized(dirty_cpu_addr, query_size);
         IteratePages<true>(dirty_cpu_addr, query_size, [](Manager* manager, u64 offset, size_t size) {
             manager->ChangeRegionState(Type::CPU, true, manager->cpu_addr + offset, size);
@@ -117,6 +126,7 @@ public:
     /// Mark region as modified from the CPU
     /// but don't mark it as modified until FlusHCachedWrites is called.
     void CachedCpuWrite(VAddr dirty_cpu_addr, u64 query_size) {
+        cpu_set_epoch.fetch_add(1, std::memory_order_acq_rel);
         ForgetSynchronized(dirty_cpu_addr, query_size);
         IteratePages<true>(dirty_cpu_addr, query_size, [this](Manager* manager, u64 offset, size_t size) {
             const VAddr cpu_address = manager->cpu_addr + offset;
@@ -127,6 +137,9 @@ public:
 
     /// Flushes cached CPU writes, and notify the device_tracker about the deltas
     void FlushCachedWrites(VAddr query_cpu_addr, u64 query_size) noexcept {
+        if (!cached_pages.empty()) {
+            cpu_set_epoch.fetch_add(1, std::memory_order_acq_rel);
+        }
         synchronized_mask = 0;
         IteratePages<false>(query_cpu_addr, query_size, [](Manager* manager, [[maybe_unused]] u64 offset, [[maybe_unused]] size_t size) {
             manager->FlushCachedWrites();
@@ -135,6 +148,7 @@ public:
 
     void FlushCachedWrites() noexcept {
         if (!cached_pages.empty()) {
+            cpu_set_epoch.fetch_add(1, std::memory_order_acq_rel);
             synchronized_mask = 0;
         }
         for (auto id : cached_pages) {
@@ -305,6 +319,8 @@ private:
     }
 
     void CreateRegion(std::size_t page_index) {
+        // A new region starts with its bits set.
+        cpu_set_epoch.fetch_add(1, std::memory_order_acq_rel);
         const VAddr base_cpu_addr = page_index << HIGHER_PAGE_BITS;
         top_tier[page_index] = GetNewManager(base_cpu_addr);
     }
@@ -330,6 +346,7 @@ private:
     ::Common::unordered_set<u32> cached_pages;
     std::array<std::pair<VAddr, VAddr>, 64> synchronized_ranges{};
     u64 synchronized_mask{};
+    std::atomic<u64> cpu_set_epoch{};
     DeviceTracker* device_tracker = nullptr;
 };
 

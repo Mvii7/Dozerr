@@ -193,11 +193,18 @@ public:
         if (VideoCommon::GpuSplit::check_owner) [[unlikely]] {
             VideoCommon::GpuSplit::CheckOwner("Scheduler::Record");
         }
+        ++record_count;
         if (chunk->Record(command)) {
             return;
         }
         DispatchWork();
         (void)chunk->Record(command);
+    }
+
+    /// Counts recorded commands: unchanged between two draws, nothing was recorded between them
+    /// (a light draw relies on what the previous draw left bound).
+    [[nodiscard]] u64 RecordCount() const noexcept {
+        return record_count;
     }
 
     template <typename T>
@@ -461,6 +468,7 @@ private:
     bool compute_writes_pending{};
     bool graphics_pipeline_missing{};
     u64 render_pass_serial{};
+    u64 record_count{};
     std::unique_ptr<CommandPool> command_pool;
 
     vk::QueryPool trace_query_pool;

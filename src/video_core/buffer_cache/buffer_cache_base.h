@@ -548,6 +548,19 @@ public:
         } while (channel_state->has_deleted_buffers);
     }
 
+    /// What a light draw (RasterizerVulkan, EDEN_NX2_LIGHT_DELTA) compares with the draw it
+    /// follows: CPU writes to tracked memory and deleted buffers since then change these.
+    [[nodiscard]] u64 CpuSetEpoch() const noexcept {
+        return memory_tracker.CpuSetEpoch();
+    }
+    [[nodiscard]] u64 BufferDeletionCount() const noexcept {
+        return buffer_deletions;
+    }
+
+    /// UpdateGraphicsBuffers for the index, vertex and indirect buffers only: a light draw keeps
+    /// every other buffer binding the draw before it left.
+    void UpdateGeometryBuffers(bool is_indexed);
+
     /// Called before each graphics draw binds its buffers (uniform keeps). `delta`: the constant
     /// buffer binds and data since the previous draw when it is a fast draw delta draw, else
     /// nullptr.

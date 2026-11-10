@@ -538,7 +538,8 @@ bool RasterizerVulkan::DeltaStillHolds(u64 serial, u64 map_serial) {
 }
 
 void RasterizerVulkan::NoteResolvedDraw(GraphicsPipeline* pipeline, bool is_indexed,
-                                        bool is_indirect, u64 serial, u64 map_serial) {
+                                        bool is_indirect, u64 serial, u64 map_serial,
+                                        u64 cpu_epoch) {
     const auto& draw_state = maxwell3d->draw_manager.draw_state;
     const auto topology = draw_state.topology;
     const auto ineligible = [&]() -> std::optional<Ineligible> {
@@ -572,7 +573,56 @@ void RasterizerVulkan::NoteResolvedDraw(GraphicsPipeline* pipeline, bool is_inde
         .topology = topology,
         .is_indexed = is_indexed,
         .is_indirect = is_indirect,
+        .record_count = scheduler.RecordCount(),
+        .cpu_epoch = cpu_epoch,
+        .deletions = buffer_cache.BufferDeletionCount(),
     };
+}
+
+bool RasterizerVulkan::TryLightDelta(GraphicsPipeline* pipeline, bool is_indexed, u64 cpu_epoch) {
+    static const bool enabled = [] {
+        const char* value = std::getenv("EDEN_NX2_LIGHT_DELTA");
+        return value == nullptr || value[0] != '0';
+    }();
+    const auto refuse = [&](LightRefusal reason) {
+        ++fast_draw_stats.light_refused[static_cast<size_t>(reason)];
+        return false;
+    };
+    if (!enabled) {
+        return refuse(LightRefusal::Disabled);
+    }
+    // Nothing a full setup reads moved but the geometry: no constant buffer bound or written
+    // since the previous draw (so the uniform, storage and texture bindings and the handles read
+    // from them are the same), nothing recorded since it (its descriptors, pipeline and render
+    // pass are what the command buffer holds), no CPU write to memory the cache tracks (so no
+    // buffer needs an upload), and no buffer deleted. A draw that writes storage buffers needs
+    // their written ranges marked each time.
+    if (!taken_delta.Empty()) {
+        return refuse(LightRefusal::DeltaBinds);
+    }
+    if (taken_draw.record_count != scheduler.RecordCount()) {
+        return refuse(LightRefusal::Recorded);
+    }
+    if (taken_draw.cpu_epoch != cpu_epoch) {
+        return refuse(LightRefusal::CpuWrites);
+    }
+    if (taken_draw.deletions != buffer_cache.BufferDeletionCount()) {
+        return refuse(LightRefusal::Deletions);
+    }
+    if (pipeline->WritesStorage()) {
+        return refuse(LightRefusal::WritesStorage);
+    }
+    buffer_cache.UpdateGeometryBuffers(is_indexed);
+    if (taken_draw.deletions != buffer_cache.BufferDeletionCount()) {
+        return refuse(LightRefusal::Deletions);
+    }
+    buffer_cache.BindHostGeometryBuffers(is_indexed);
+    // An upload needs the barrier after it and ends the render pass: set up in full.
+    if (buffer_cache.any_buffer_uploaded || !scheduler.IsRenderPassActive() ||
+        scheduler.BoundGraphicsPipeline() != pipeline) {
+        return refuse(LightRefusal::Uploaded);
+    }
+    return true;
 }
 
 void RasterizerVulkan::ReportFastDraws() {
@@ -604,6 +654,23 @@ void RasterizerVulkan::ReportFastDraws() {
              per_second(FullDraw::Submitted), per_second(FullDraw::RenderPass),
              per_second(FullDraw::DeltaPipeline), per_second(FullDraw::HandleBind),
              per_second(FullDraw::HandleData), per_second(FullDraw::SampledImages));
+    {
+        static constexpr std::array<const char*, static_cast<size_t>(LightRefusal::Count)>
+            refusal_names{"disabled", "constant buffer binds or data", "commands recorded between",
+                          "CPU writes to tracked memory", "buffers deleted",
+                          "writes storage buffers", "upload or render pass"};
+        std::string refused;
+        for (size_t reason = 0; reason < stats.light_refused.size(); ++reason) {
+            if (stats.light_refused[reason] != 0) {
+                refused += fmt::format(" {} {:.0f}", refusal_names[reason],
+                                       static_cast<double>(stats.light_refused[reason]) / seconds);
+            }
+        }
+        LOG_INFO(Render_Vulkan,
+                 "Light delta draws per second: {:.0f} light | delta draws that were not:{}",
+                 static_cast<double>(stats.light) / seconds,
+                 refused.empty() ? std::string{" none"} : refused);
+    }
     static constexpr std::array<const char*, static_cast<size_t>(Ineligible::Count)>
         ineligible_names{"indirect",       "mesh",          "not built",     "writes images",
                          "transform feedback", "inline index", "quads",       "repacked vertices",
@@ -1017,6 +1084,7 @@ void RasterizerVulkan::PrepareDraw(bool is_indexed, Func&& draw_func, bool is_in
     // break from here on, this draw's own resolve included, ends the delta chain.
     const u64 draw_serial = FastDraw::Serial();
     const u64 draw_map_serial = gpu_memory->MapSerial();
+    const u64 draw_cpu_epoch = buffer_cache.CpuSetEpoch();
     // update engine as channel may be different.
     pipeline->SetEngine(maxwell3d, gpu_memory);
     const u32 repack_dirty = buffer_cache_runtime.SetVertexRepackLayout(
@@ -1034,8 +1102,15 @@ void RasterizerVulkan::PrepareDraw(bool is_indexed, Func&& draw_func, bool is_in
     const bool delta_holds =
         delta_pipeline != nullptr && DeltaStillHolds(draw_serial, draw_map_serial);
     const DrawPath path = delta_holds && !verify_pipeline ? DrawPath::Delta : DrawPath::Full;
-    buffer_cache.BeginGraphicsUniforms(path == DrawPath::Delta ? &taken_delta : nullptr);
-    if (path == DrawPath::Delta) {
+    const bool light_delta = path == DrawPath::Delta && !repack_dirty &&
+                             TryLightDelta(pipeline, is_indexed, draw_cpu_epoch);
+    if (!light_delta) {
+        buffer_cache.BeginGraphicsUniforms(path == DrawPath::Delta ? &taken_delta : nullptr);
+    }
+    if (light_delta) {
+        ++fast_draw_stats.delta;
+        ++fast_draw_stats.light;
+    } else if (path == DrawPath::Delta) {
         if (Profile::Scope scope{Profile::Zone::Configure}; !pipeline->ConfigureDelta(is_indexed)) {
             report_failure("configure failed");
             TraceRenderState(is_indexed, "configure-failed", nullptr);
@@ -1156,7 +1231,8 @@ void RasterizerVulkan::PrepareDraw(bool is_indexed, Func&& draw_func, bool is_in
         }
     }
     if (fast_draw_on) {
-        NoteResolvedDraw(pipeline, is_indexed, is_indirect, draw_serial, draw_map_serial);
+        NoteResolvedDraw(pipeline, is_indexed, is_indirect, draw_serial, draw_map_serial,
+                         draw_cpu_epoch);
         const size_t index = static_cast<size_t>(path);
         fast_draw_stats.prepare_ns[index] += Profile::Now() - fast_draw_start;
         ++fast_draw_stats.prepare_draws[index];

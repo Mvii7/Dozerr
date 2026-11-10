@@ -394,6 +394,23 @@ private:
         Maxwell::PrimitiveTopology topology{};
         bool is_indexed{};
         bool is_indirect{}; ///< An HLE indirect draw (IndirectFastDrawable): reused by the same kind
+        /// What a light draw compares (EDEN_NX2_LIGHT_DELTA): commands recorded, CPU writes to
+        /// tracked memory (read before the draw resolved) and deleted buffers, as the draw left
+        /// them.
+        u64 record_count{};
+        u64 cpu_epoch{};
+        u64 deletions{};
+    };
+    /// Why a delta draw was not a light draw.
+    enum class LightRefusal : u8 {
+        Disabled,
+        DeltaBinds,
+        Recorded,
+        CpuWrites,
+        Deletions,
+        WritesStorage,
+        Uploaded,
+        Count,
     };
     enum class FullDraw : u8 {
         NoCandidate,
@@ -425,6 +442,8 @@ private:
     enum class DrawPath : u8 { Full, Delta, Count };
     struct FastDrawStats {
         u64 delta{};
+        u64 light{}; ///< Delta draws that only updated the geometry buffers (LIGHT_DELTA)
+        std::array<u64, static_cast<size_t>(LightRefusal::Count)> light_refused{};
         std::array<u64, static_cast<size_t>(FullDraw::Count)> full{};
         std::array<u64, static_cast<size_t>(Ineligible::Count)> ineligible{};
         /// PrepareDraw time and draws per path.
@@ -453,7 +472,13 @@ private:
     /// map_serial as read then), and the images it samples need no preparing.
     bool DeltaStillHolds(u64 serial, u64 map_serial);
     void NoteResolvedDraw(GraphicsPipeline* pipeline, bool is_indexed, bool is_indirect, u64 serial,
-                          u64 map_serial);
+                          u64 map_serial, u64 cpu_epoch);
+    /// A delta draw whose constant buffer binds and data, storage buffers, textures and every
+    /// other buffer binding are what the previous draw left, with nothing recorded and no CPU
+    /// write to tracked memory since: it updates and binds the index, vertex and indirect
+    /// buffers and records the draw (EDEN_NX2_LIGHT_DELTA, ported in spirit from Dozer's light
+    /// draw). False when it must set up in full; what it bound then stays valid.
+    [[nodiscard]] bool TryLightDelta(GraphicsPipeline* pipeline, bool is_indexed, u64 cpu_epoch);
     void ReportFastDraws();
     ReusableDraw reusable_draw;
     ReusableDraw taken_draw; ///< The draw TakeReusableDraw last returned the pipeline of

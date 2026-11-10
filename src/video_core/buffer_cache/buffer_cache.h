@@ -1580,6 +1580,19 @@ void BufferCache<P>::UpdateGraphicsBuffers(bool is_indexed) {
 }
 
 template <class P>
+void BufferCache<P>::UpdateGeometryBuffers(bool is_indexed) {
+    BufferOperations([&]() {
+        if (is_indexed) {
+            UpdateIndexBuffer();
+        }
+        UpdateVertexBuffers();
+        if (current_draw_indirect) {
+            UpdateDrawIndirect();
+        }
+    });
+}
+
+template <class P>
 void BufferCache<P>::UpdateComputeBuffers() {
     do {
         channel_state->has_deleted_buffers = false;
