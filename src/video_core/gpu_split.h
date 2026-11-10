@@ -77,6 +77,10 @@ struct AcquireStats {
     std::atomic<u64> mismatches{}; ///< VERIFY: passed, yet the word after a drain doesn't meet it
     std::atomic<u64> unlanded{};   ///< VERIFY: met by a queued release not in memory after a drain
     std::atomic<u64> late{};       ///< VERIFY: a poll kept waiting, yet a drain meets it
+    /// EDEN_NX2_ACQUIRE_PEEK: equal acquires decided by Nx2AcquirePeek::Decide, and those that
+    /// went on without a drain. Verdict order matches Nx2AcquirePeek::Verdict.
+    std::atomic<u64> peek_skipped{};
+    std::array<std::atomic<u64>, 9> peek_verdicts{};
 };
 inline AcquireStats g_acquire_stats;
 /// Whether g_acquire_stats counts (EDEN_NX2_GPU_PROFILE or EDEN_NX2_ACQUIRE_VERIFY), as of the
