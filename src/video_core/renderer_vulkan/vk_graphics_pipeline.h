@@ -326,6 +326,25 @@ public:
     /// can't be recorded, as for Configure.
     bool ConfigureDelta(bool is_indexed);
 
+    /// Why a constant-buffer delta cannot keep this pipeline's descriptors. One value per draw.
+    enum class UniformWordBlock : u8 {
+        None,       ///< The descriptor words are outside the writes, and their slots did not move
+        Shape,      ///< A descriptor this pipeline reads is not a single direct word
+        SlotBound,  ///< The constant buffer a descriptor is read from was bound again
+        StorageWords, ///< A storage buffer descriptor's bytes were written
+        HandleWords,  ///< A texture or image buffer descriptor's bytes were written
+        Unmapped,   ///< A descriptor's constant buffer has no device address
+    };
+
+    /// EDEN_NX2_LIGHT_UNIFORM: constant-buffer writes in `delta` do not change a storage, texture
+    /// or image buffer descriptor this pipeline reads, and no such slot was bound again.
+    [[nodiscard]] bool LightUniformDescriptorsStay(
+        const VideoCommon::Nx2FastDraw::Delta& delta) const {
+        return LightUniformWordBlock(delta) == UniformWordBlock::None;
+    }
+    [[nodiscard]] UniformWordBlock LightUniformWordBlock(
+        const VideoCommon::Nx2FastDraw::Delta& delta) const;
+
     /// The next Configure keeps the views and samplers it resolves for delta draws. With
     /// `verify`, it first compares them with the ones kept before; DeltaMismatch reports it.
     void CaptureNextDelta(bool verify) noexcept {

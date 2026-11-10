@@ -25,6 +25,7 @@
 #include "video_core/engines/maxwell_3d.h"
 #include "video_core/host1x/gpu_device_memory_manager.h"
 #include "video_core/memory_manager.h"
+#include "video_core/nx2.h"
 #include "video_core/rasterizer_interface.h"
 
 namespace VideoCore {
@@ -140,6 +141,7 @@ public:
         std::unique_lock lock{mutex};
         const std::optional<VAddr> cpu_addr = gpu_memory->GpuToCpuAddress(gpu_addr);
         ASSERT(cpu_addr);
+        Tegra::Nx2MarkUntrackedWrite(*cpu_addr, 16);
 
         CachedQuery* query = TryGet(*cpu_addr);
         if (!query) {

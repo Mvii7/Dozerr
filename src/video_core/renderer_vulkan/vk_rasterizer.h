@@ -400,6 +400,9 @@ private:
         u64 record_count{};
         u64 cpu_epoch{};
         u64 deletions{};
+        /// Cached writes, and the constant-buffer ones among them (EDEN_NX2_LIGHT_UNIFORM).
+        u64 cached_ops{};
+        u64 const_ops{};
     };
     /// Why a delta draw was not a light draw.
     enum class LightRefusal : u8 {
@@ -443,6 +446,34 @@ private:
     struct FastDrawStats {
         u64 delta{};
         u64 light{}; ///< Delta draws that only updated the geometry buffers (LIGHT_DELTA)
+        u64 light_uniform{}; ///< Delta draws that also refreshed uniform buffers (LIGHT_UNIFORM)
+        /// Of the constant-buffer refusals: another cached write, or storage/texture data.
+        u64 uniform_other{};
+        u64 uniform_buffers{};
+        /// Light refusals whose delta was a bind, data, or both (EDEN_NX2_GPU_PROFILE).
+        u64 cb_bind_only{};
+        u64 cb_data_only{};
+        u64 cb_both{};
+        /// Of data refusals: every written word already in guest memory; all of them the base
+        /// vertex and instance words (offsets 0x640 and 0x644); any at another offset; the size
+        /// or address register changed.
+        u64 cb_data_matched{};
+        u64 cb_data_640{};
+        u64 cb_data_other{};
+        u64 cb_address_changed{};
+        /// 1 in 32 data refusals: would the uniform path's descriptor and range checks have passed.
+        u64 cb_sample{};
+        u64 cb_sample_desc_stay{};
+        u64 cb_sample_range_stay{};
+        /// One reason per constant-buffer refusal, in log order: a constant buffer moved and no
+        /// descriptor is read from it, a descriptor's constant buffer was bound again, storage
+        /// descriptor words written, texture or image descriptor words written, a descriptor is
+        /// not one direct word, a descriptor's buffer is unmapped, the shader writes a storage
+        /// buffer, the shader writes a texture buffer, a storage buffer's range overlaps the
+        /// write, a texture buffer's range overlaps the write, the uniform checks would pass.
+        std::array<u64, 11> uniform_block{};
+        /// Maxwell3D::base_same_skips at the previous report.
+        u64 base_same_cursor{};
         std::array<u64, static_cast<size_t>(LightRefusal::Count)> light_refused{};
         std::array<u64, static_cast<size_t>(FullDraw::Count)> full{};
         std::array<u64, static_cast<size_t>(Ineligible::Count)> ineligible{};
@@ -479,6 +510,13 @@ private:
     /// buffers and records the draw (EDEN_NX2_LIGHT_DELTA, ported in spirit from Dozer's light
     /// draw). False when it must set up in full; what it bound then stays valid.
     [[nodiscard]] bool TryLightDelta(GraphicsPipeline* pipeline, bool is_indexed, u64 cpu_epoch);
+    /// A delta draw whose only extra change is constant-buffer data that does not touch storage
+    /// or texture buffers: ConfigureDelta without reading or synchronizing those buffers.
+    /// Off unless EDEN_NX2_LIGHT_UNIFORM=1. `epoch_before_flush` is the CPU-set epoch before this draw's
+    /// FlushCaching. NotTaken falls through to ConfigureDelta; Failed means that call failed.
+    enum class LightUniformAttempt : u8 { NotTaken, Configured, Failed };
+    [[nodiscard]] LightUniformAttempt TryLightUniform(GraphicsPipeline* pipeline, bool is_indexed,
+                                                      u64 epoch_before_flush);
     void ReportFastDraws();
     ReusableDraw reusable_draw;
     ReusableDraw taken_draw; ///< The draw TakeReusableDraw last returned the pipeline of

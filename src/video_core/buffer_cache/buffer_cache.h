@@ -1476,6 +1476,7 @@ bool BufferCache<P>::DMACopy(GPUVAddr src_address, GPUVAddr dest_address, u64 am
     Tegra::Memory::DeviceGuestMemoryScoped<u8, Tegra::Memory::GuestMemoryFlags::UnsafeReadWrite>
         tmp(device_memory, *cpu_src_address, amount, &tmp_buffer);
     tmp.SetAddressAndSize(*cpu_dest_address, amount);
+    Tegra::Nx2MarkUntrackedWrite(*cpu_dest_address, amount);
     return true;
 }
 
@@ -2134,6 +2135,7 @@ void BufferCache<P>::WriteDownloadedMemory(const Common::RangeSet<DAddr>& cpu_wr
         ForgetEarlyLanded(device_addr, size);
     }
     if (!cpu_written.Intersects(device_addr, size)) {
+        Tegra::Nx2MarkUntrackedWrite(device_addr, size);
         device_memory.WriteBlockUnsafe(device_addr, data, size);
         return;
     }
@@ -2143,6 +2145,7 @@ void BufferCache<P>::WriteDownloadedMemory(const Common::RangeSet<DAddr>& cpu_wr
         parts.Subtract(start, end - start);
     });
     parts.ForEach([&](DAddr start, DAddr end) {
+        Tegra::Nx2MarkUntrackedWrite(start, end - start);
         device_memory.WriteBlockUnsafe(start, data + (start - device_addr), end - start);
     });
 }
@@ -2718,10 +2721,12 @@ bool BufferCache<P>::BindMultiRangeStorage(const Binding& binding, bool is_writt
             const MultiRangeSegment& segment = pool[binding.segment_first + index];
             Buffer& buffer = slot_buffers[segment.buffer_id];
             TouchBuffer(buffer, segment.buffer_id);
-            SynchronizeBuffer(buffer, segment.device_addr, segment.size);
+            if (!reuse_untouched_buffers) {
+                SynchronizeBuffer(buffer, segment.device_addr, segment.size);
+            }
             const u32 offset = buffer.Offset(segment.device_addr);
             buffer.MarkUsage(offset, segment.size);
-            if (is_written && write_mark_limit != 0) {
+            if (is_written && write_mark_limit != 0 && !reuse_untouched_buffers) {
                 // write_mark_limit: the native write mark (BindComputeStorageBuffer), spread over
                 // the segments in order.
                 const u32 mark = static_cast<u32>(std::min<u64>(segment.size, write_mark_limit));
@@ -2750,12 +2755,14 @@ void BufferCache<P>::BindHostGraphicsStorageBuffers(size_t stage) {
         Buffer& buffer = slot_buffers[binding.buffer_id];
         TouchBuffer(buffer, binding.buffer_id);
         const u32 size = binding.size;
-        SynchronizeBuffer(buffer, binding.device_addr, size);
+        if (!reuse_untouched_buffers) {
+            SynchronizeBuffer(buffer, binding.device_addr, size);
+        }
 
         const u32 offset = buffer.Offset(binding.device_addr);
         buffer.MarkUsage(offset, size);
 
-        if (is_written) {
+        if (is_written && !reuse_untouched_buffers) {
             MarkWrittenBuffer(binding.buffer_id, binding.device_addr, size);
         }
 
@@ -2774,10 +2781,12 @@ void BufferCache<P>::BindHostGraphicsTextureBuffers(size_t stage) {
         const TextureBufferBinding& binding = channel_state->texture_buffers[stage][index];
         Buffer& buffer = slot_buffers[binding.buffer_id];
         const u32 size = binding.size;
-        SynchronizeBuffer(buffer, binding.device_addr, size);
+        if (!reuse_untouched_buffers) {
+            SynchronizeBuffer(buffer, binding.device_addr, size);
+        }
 
         const bool is_written = ((channel_state->written_texture_buffers[stage] >> index) & 1) != 0;
-        if (is_written) {
+        if (is_written && !reuse_untouched_buffers) {
             MarkWrittenBuffer(binding.buffer_id, binding.device_addr, size);
         }
 
@@ -3140,8 +3149,63 @@ void BufferCache<P>::UpdateUniformBuffers(size_t stage) {
 }
 
 template <class P>
+BufferCache<P>::UniformRangeBlock BufferCache<P>::LightUniformRangeBlock(
+    const Nx2FastDraw::Delta& delta) const {
+    const auto overlaps = [&](DAddr address, u32 size) {
+        if (address == 0 || size == 0) {
+            return false;
+        }
+        const DAddr end = address + size;
+        for (u32 write = 0; write < delta.num_device_writes; ++write) {
+            if (delta.device_begin[write] < end && address < delta.device_end[write]) {
+                return true;
+            }
+        }
+        return false;
+    };
+    for (size_t stage = 0; stage < NUM_STAGES; ++stage) {
+        if (channel_state->written_storage_buffers[stage] != 0) {
+            return UniformRangeBlock::StorageFlag;
+        }
+        if (channel_state->written_texture_buffers[stage] != 0) {
+            return UniformRangeBlock::TextureFlag;
+        }
+        UniformRangeBlock storage = UniformRangeBlock::None;
+        ForEachEnabledBit(channel_state->enabled_storage_buffers[stage], [&](u32 index) {
+            if (storage != UniformRangeBlock::None) {
+                return;
+            }
+            const Binding& binding = channel_state->storage_buffers[stage][index];
+            if (binding.segment_count >= 2 ||
+                (binding.size != 0 && binding.buffer_id == NULL_BUFFER_ID) ||
+                overlaps(binding.device_addr, binding.size)) {
+                storage = UniformRangeBlock::StorageRange;
+            }
+        });
+        if (storage != UniformRangeBlock::None) {
+            return storage;
+        }
+        UniformRangeBlock texture = UniformRangeBlock::None;
+        ForEachEnabledBit(channel_state->enabled_texture_buffers[stage], [&](u32 index) {
+            if (texture != UniformRangeBlock::None) {
+                return;
+            }
+            const TextureBufferBinding& binding = channel_state->texture_buffers[stage][index];
+            if ((binding.size != 0 && binding.buffer_id == NULL_BUFFER_ID) ||
+                overlaps(binding.device_addr, binding.size)) {
+                texture = UniformRangeBlock::TextureRange;
+            }
+        });
+        if (texture != UniformRangeBlock::None) {
+            return texture;
+        }
+    }
+    return UniformRangeBlock::None;
+}
+
+template <class P>
 void BufferCache<P>::UpdateStorageBuffers(size_t stage) {
-    if (channel_state->enabled_storage_buffers[stage] == 0) [[likely]] {
+    if (reuse_untouched_buffers || channel_state->enabled_storage_buffers[stage] == 0) [[likely]] {
         return;
     }
     ForEachEnabledBit(channel_state->enabled_storage_buffers[stage], [&](u32 index) {
@@ -3156,7 +3220,7 @@ void BufferCache<P>::UpdateStorageBuffers(size_t stage) {
 
 template <class P>
 void BufferCache<P>::UpdateTextureBuffers(size_t stage) {
-    if (channel_state->enabled_texture_buffers[stage] == 0) [[likely]] {
+    if (reuse_untouched_buffers || channel_state->enabled_texture_buffers[stage] == 0) [[likely]] {
         return;
     }
     ForEachEnabledBit(channel_state->enabled_texture_buffers[stage], [&](u32 index) {

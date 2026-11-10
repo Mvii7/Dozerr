@@ -559,6 +559,7 @@ void RasterizerVulkan::NoteResolvedDraw(GraphicsPipeline* pipeline, bool is_inde
         if (!VideoCommon::GpuSplit::OnBackThread()) return Ineligible::OffBackThread;
         return std::nullopt;
     }();
+    maxwell3d->cb_probe.Clear();
     if (ineligible) {
         ++fast_draw_stats.ineligible[static_cast<size_t>(*ineligible)];
         return;
@@ -576,6 +577,8 @@ void RasterizerVulkan::NoteResolvedDraw(GraphicsPipeline* pipeline, bool is_inde
         .record_count = scheduler.RecordCount(),
         .cpu_epoch = cpu_epoch,
         .deletions = buffer_cache.BufferDeletionCount(),
+        .cached_ops = gpu_memory->CachedWriteOps(),
+        .const_ops = gpu_memory->ConstBufferWriteOps(),
     };
 }
 
@@ -597,8 +600,76 @@ bool RasterizerVulkan::TryLightDelta(GraphicsPipeline* pipeline, bool is_indexed
     // pass are what the command buffer holds), no CPU write to memory the cache tracks (so no
     // buffer needs an upload), and no buffer deleted. A draw that writes storage buffers needs
     // their written ranges marked each time.
+    // Counted by TryLightUniform when that path does not take the draw either.
     if (!taken_delta.Empty()) {
-        return refuse(LightRefusal::DeltaBinds);
+        if (VideoCommon::Nx2Profile::Enabled()) [[unlikely]] {
+            const auto& probe = maxwell3d->cb_probe;
+            const bool binds = (taken_delta.binds[0] | taken_delta.binds[1] | taken_delta.binds[2] |
+                                taken_delta.binds[3] | taken_delta.binds[4]) != 0;
+            const bool data = taken_delta.num_writes != 0;
+            if (binds && data) {
+                ++fast_draw_stats.cb_both;
+            } else if (binds) {
+                ++fast_draw_stats.cb_bind_only;
+            } else if (data) {
+                ++fast_draw_stats.cb_data_only;
+            }
+            if (data && probe.writes != 0 && probe.matched == probe.writes) {
+                ++fast_draw_stats.cb_data_matched;
+            }
+            if (data && probe.base_words != 0 && probe.other_offset == 0) {
+                ++fast_draw_stats.cb_data_640;
+            } else if (data && probe.other_offset != 0) {
+                ++fast_draw_stats.cb_data_other;
+            }
+            if (probe.address_writes != 0) {
+                ++fast_draw_stats.cb_address_changed;
+            }
+            // Every refused draw, one reason. The uniform path stays off; this only records which
+            // of its checks would fail. The walk is what build 16 spent a frame on.
+            u32 block = 10;
+            using Word = GraphicsPipeline::UniformWordBlock;
+            switch (pipeline->LightUniformWordBlock(taken_delta)) {
+            case Word::SlotBound:
+                block = 1;
+                break;
+            case Word::StorageWords:
+                block = 2;
+                break;
+            case Word::HandleWords:
+                block = 3;
+                break;
+            case Word::Shape:
+                block = 4;
+                break;
+            case Word::Unmapped:
+                block = 5;
+                break;
+            case Word::None: {
+                using Range = decltype(buffer_cache)::UniformRangeBlock;
+                switch (buffer_cache.LightUniformRangeBlock(taken_delta)) {
+                case Range::StorageFlag:
+                    block = 6;
+                    break;
+                case Range::TextureFlag:
+                    block = 7;
+                    break;
+                case Range::StorageRange:
+                    block = 8;
+                    break;
+                case Range::TextureRange:
+                    block = 9;
+                    break;
+                case Range::None:
+                    block = binds ? 0 : 10;
+                    break;
+                }
+                break;
+            }
+            }
+            ++fast_draw_stats.uniform_block[block];
+        }
+        return false;
     }
     if (taken_draw.record_count != scheduler.RecordCount()) {
         return refuse(LightRefusal::Recorded);
@@ -623,6 +694,44 @@ bool RasterizerVulkan::TryLightDelta(GraphicsPipeline* pipeline, bool is_indexed
         return refuse(LightRefusal::Uploaded);
     }
     return true;
+}
+
+RasterizerVulkan::LightUniformAttempt RasterizerVulkan::TryLightUniform(
+    GraphicsPipeline* pipeline, bool is_indexed, u64 epoch_before_flush) {
+    // Build 16 took this on 0 of ~187k candidate draws a second and spent the check on the rest.
+    // EDEN_NX2_LIGHT_UNIFORM=1 turns it back on.
+    static const bool enabled = [] {
+        const char* value = std::getenv("EDEN_NX2_LIGHT_UNIFORM");
+        return value != nullptr && value[0] == '1';
+    }();
+    const auto refuse = [&](bool buffers) {
+        ++fast_draw_stats.light_refused[static_cast<size_t>(LightRefusal::DeltaBinds)];
+        if (buffers) {
+            ++fast_draw_stats.uniform_buffers;
+        } else {
+            ++fast_draw_stats.uniform_other;
+        }
+        return LightUniformAttempt::NotTaken;
+    };
+    if (!enabled) {
+        ++fast_draw_stats.light_refused[static_cast<size_t>(LightRefusal::DeltaBinds)];
+        return LightUniformAttempt::NotTaken;
+    }
+    if (pipeline->WritesStorage() || taken_draw.record_count != scheduler.RecordCount() ||
+        taken_draw.deletions != buffer_cache.BufferDeletionCount() ||
+        epoch_before_flush != taken_draw.cpu_epoch ||
+        gpu_memory->CachedWriteOps() - taken_draw.cached_ops !=
+            gpu_memory->ConstBufferWriteOps() - taken_draw.const_ops) {
+        return refuse(false);
+    }
+    if (!pipeline->LightUniformDescriptorsStay(taken_delta) ||
+        !buffer_cache.LightUniformRangesStay(taken_delta)) {
+        return refuse(true);
+    }
+    buffer_cache.reuse_untouched_buffers = true;
+    const bool configured = pipeline->ConfigureDelta(is_indexed);
+    buffer_cache.reuse_untouched_buffers = false;
+    return configured ? LightUniformAttempt::Configured : LightUniformAttempt::Failed;
 }
 
 void RasterizerVulkan::ReportFastDraws() {
@@ -667,9 +776,43 @@ void RasterizerVulkan::ReportFastDraws() {
             }
         }
         LOG_INFO(Render_Vulkan,
-                 "Light delta draws per second: {:.0f} light | delta draws that were not:{}",
+                 "Light delta draws per second: {:.0f} plain, {:.0f} uniform | delta draws that "
+                 "were not:{} | uniform not taken: other writes {:.0f}, storage or texture {:.0f}",
                  static_cast<double>(stats.light) / seconds,
-                 refused.empty() ? std::string{" none"} : refused);
+                 static_cast<double>(stats.light_uniform) / seconds,
+                 refused.empty() ? std::string{" none"} : refused,
+                 static_cast<double>(stats.uniform_other) / seconds,
+                 static_cast<double>(stats.uniform_buffers) / seconds);
+        const auto per = [&](u64 count) { return static_cast<double>(count) / seconds; };
+        u64 uniform_sum = 0;
+        for (const u64 count : stats.uniform_block) {
+            uniform_sum += count;
+        }
+        const u64 cb_refusals = stats.cb_bind_only + stats.cb_data_only + stats.cb_both;
+        LOG_INFO(Render_Vulkan,
+                 "Constant buffer refusals per second: bind {:.0f}, data {:.0f}, both {:.0f} | "
+                 "data whose bytes were already in memory {:.0f}, only base vertex and instance "
+                 "{:.0f}, other offset {:.0f}, address or size changed {:.0f}",
+                 per(stats.cb_bind_only), per(stats.cb_data_only), per(stats.cb_both),
+                 per(stats.cb_data_matched), per(stats.cb_data_640), per(stats.cb_data_other),
+                 per(stats.cb_address_changed));
+        LOG_INFO(Render_Vulkan,
+                 "Uniform block per second: cbuf moved {:.0f}, descriptor slot rebound {:.0f}, "
+                 "storage descriptor words {:.0f}, handle words {:.0f}, descriptor shape {:.0f}, "
+                 "slot unmapped {:.0f}, storage written flag {:.0f}, texture written flag {:.0f}, "
+                 "storage range {:.0f}, texture range {:.0f}, checks would pass {:.0f} | sum {:.0f} "
+                 "of {:.0f} constant-buffer refusals",
+                 per(stats.uniform_block[0]), per(stats.uniform_block[1]), per(stats.uniform_block[2]),
+                 per(stats.uniform_block[3]), per(stats.uniform_block[4]), per(stats.uniform_block[5]),
+                 per(stats.uniform_block[6]), per(stats.uniform_block[7]), per(stats.uniform_block[8]),
+                 per(stats.uniform_block[9]), per(stats.uniform_block[10]), per(uniform_sum),
+                 per(cb_refusals));
+        const u64 skips_now = maxwell3d->base_same_skips;
+        LOG_INFO(Render_Vulkan,
+                 "Base vertex and instance words not counted as a change: {:.0f}/s "
+                 "(EDEN_NX2_BASE_SAME=0 counts them)",
+                 static_cast<double>(skips_now - stats.base_same_cursor) / seconds);
+        stats.base_same_cursor = skips_now;
     }
     static constexpr std::array<const char*, static_cast<size_t>(Ineligible::Count)>
         ineligible_names{"indirect",       "mesh",          "not built",     "writes images",
@@ -741,7 +884,8 @@ void RasterizerVulkan::ReportFastDraws() {
     }
     LOG_INFO(Render_Vulkan, "Fast draw state changes per second by last break:{} | by method:{}",
              breaks, top);
-    stats = FastDrawStats{.window_start = now};
+    const u64 base_same_cursor = stats.base_same_cursor;
+    stats = FastDrawStats{.base_same_cursor = base_same_cursor, .window_start = now};
 }
 
 // Experimental adaptation of PokeDinner commit 76df4591a747: execute the reset shader's
@@ -867,6 +1011,8 @@ void RasterizerVulkan::PrepareDraw(bool is_indexed, Func&& draw_func, bool is_in
     }
     fast_draw_verify = fast_draw_on && FastDraw::VerifyEnabled();
     const u64 fast_draw_start = fast_draw_on ? Profile::Now() : 0;
+    // Before FlushCaching marks the constant-buffer writes queued since the previous draw.
+    const u64 epoch_before_flush = buffer_cache.CpuSetEpoch();
     {
         Profile::Scope scope{Profile::Zone::FlushWork};
         FlushWork();
@@ -1104,12 +1250,24 @@ void RasterizerVulkan::PrepareDraw(bool is_indexed, Func&& draw_func, bool is_in
     const DrawPath path = delta_holds && !verify_pipeline ? DrawPath::Delta : DrawPath::Full;
     const bool light_delta = path == DrawPath::Delta && !repack_dirty &&
                              TryLightDelta(pipeline, is_indexed, draw_cpu_epoch);
+    LightUniformAttempt light_uniform = LightUniformAttempt::NotTaken;
     if (!light_delta) {
         buffer_cache.BeginGraphicsUniforms(path == DrawPath::Delta ? &taken_delta : nullptr);
+        if (path == DrawPath::Delta && !repack_dirty && !taken_delta.Empty()) {
+            light_uniform = TryLightUniform(pipeline, is_indexed, epoch_before_flush);
+            if (light_uniform == LightUniformAttempt::Failed) {
+                report_failure("configure failed");
+                TraceRenderState(is_indexed, "configure-failed", nullptr);
+                return;
+            }
+        }
     }
     if (light_delta) {
         ++fast_draw_stats.delta;
         ++fast_draw_stats.light;
+    } else if (light_uniform == LightUniformAttempt::Configured) {
+        ++fast_draw_stats.delta;
+        ++fast_draw_stats.light_uniform;
     } else if (path == DrawPath::Delta) {
         if (Profile::Scope scope{Profile::Zone::Configure}; !pipeline->ConfigureDelta(is_indexed)) {
             report_failure("configure failed");

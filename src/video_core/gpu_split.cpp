@@ -144,6 +144,7 @@ void GpuSplit::Stop() {
     // wrap at a time and never reached the old write position (the next game's first GPU work
     // never ran, it waited on its syncpoint forever), and the engines it held were freed.
     ring.reset();
+    ++session;
     write_position = 0;
     last_writer_position = 0;
     last_sync_position = 0;
@@ -680,6 +681,20 @@ void GpuSplit::ReportAcquire() {
     const u64 mismatches = take(stats.mismatches);
     const u64 unlanded = take(stats.unlanded);
     const u64 late = take(stats.late);
+    std::array<u64, stats.peek_verdicts.size()> verdicts{};
+    u64 verdict_total = 0;
+    for (size_t i = 0; i < verdicts.size(); ++i) {
+        verdicts[i] = take(stats.peek_verdicts[i]);
+        verdict_total += verdicts[i];
+    }
+    const u64 peek_skipped = take(stats.peek_skipped);
+    if (verdict_total != 0 || peek_skipped != 0) {
+        LOG_INFO(HW_GPU,
+                 "Equal acquire peek: {} skipped the drain | skip {}, unmet {}, mask {}, wrapped "
+                 "{}, queued release {}, went down {}, first wait {}, not advanced {}, untracked {}",
+                 peek_skipped, verdicts[0], verdicts[1], verdicts[2], verdicts[3], verdicts[4],
+                 verdicts[5], verdicts[6], verdicts[7], verdicts[8]);
+    }
     if (mismatches != 0 || unlanded != 0 || late != 0) {
         LOG_WARNING(HW_GPU,
                     "Acquire verify: {} passed but not met after a drain, {} met by a "

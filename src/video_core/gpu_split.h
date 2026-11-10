@@ -77,6 +77,10 @@ struct AcquireStats {
     std::atomic<u64> mismatches{}; ///< VERIFY: passed, yet the word after a drain doesn't meet it
     std::atomic<u64> unlanded{};   ///< VERIFY: met by a queued release not in memory after a drain
     std::atomic<u64> late{};       ///< VERIFY: a poll kept waiting, yet a drain meets it
+    /// EDEN_NX2_ACQUIRE_PEEK: equal acquires decided by Nx2AcquirePeek::Decide, and those that
+    /// went on without a drain. Verdict order matches Nx2AcquirePeek::Verdict.
+    std::atomic<u64> peek_skipped{};
+    std::array<std::atomic<u64>, 9> peek_verdicts{};
 };
 inline AcquireStats g_acquire_stats;
 /// Whether g_acquire_stats counts (EDEN_NX2_GPU_PROFILE or EDEN_NX2_ACQUIRE_VERIFY), as of the
@@ -218,6 +222,37 @@ public:
         if (writes == Writes::Anywhere) {
             NoteAnyWrite();
         }
+    }
+    /// Defer, returning the copy of `func`. Until Published(start) the back cannot see it, so the
+    /// front may still change that copy (Maxwell3D::FrontIndirectDraw merges the next record in).
+    template <typename Func>
+    u64* DeferEditable(const Func& func, u64& start, u64 flags = 0,
+                      Writes writes = Writes::Anywhere) {
+        static_assert(std::is_trivially_copyable_v<Func> && alignof(Func) <= alignof(u64));
+        constexpr size_t payload = (sizeof(Func) + sizeof(u64) - 1) / sizeof(u64);
+        u64* const entry = Reserve(2 + payload);
+        // ReserveSlow leaves the entry at write_position too, including after a wrap.
+        start = write_position;
+        entry[0] = static_cast<u64>(Kind::Call) | flags | (u64{payload} << 8);
+        entry[1] = reinterpret_cast<u64>(&CallThunk<Func>);
+        std::memcpy(entry + 2, &func, sizeof(Func));
+        Commit(2 + payload);
+        if (writes == Writes::Anywhere) {
+            NoteAnyWrite();
+        }
+        return entry + 2;
+    }
+    /// Front: where the next entry will go.
+    [[nodiscard]] u64 WritePosition() const {
+        return write_position;
+    }
+    /// Front: the entry at `position` may already be visible to the back.
+    [[nodiscard]] bool Published(u64 position) const {
+        return position < published_local;
+    }
+    /// Front: changes in Stop. Positions and payload pointers from the previous session are dead.
+    [[nodiscard]] u64 Session() const {
+        return session;
     }
     /// Defer, calling `func` with a copy of `words` (a std::span<const u32>).
     template <typename Func>
@@ -454,6 +489,7 @@ private:
     std::array<u64, size_t{1} << WriteSlotBits> write_positions{};
     u64 published_local{};
     u64 consumed_cache{};
+    u64 session{1};
     /// Words between publishes: small right after a drain, while the back has nothing to do.
     size_t publish_every{PublishEvery};
     Tegra::Engines::EngineInterface* front_engine{};

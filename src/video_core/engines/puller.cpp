@@ -24,6 +24,7 @@
 #include "video_core/gpu_split.h"
 #include "video_core/memory_manager.h"
 #include "video_core/nx2.h"
+#include "video_core/nx2_acquire_peek.h"
 #include "video_core/nx2_fast_draw.h"
 #include "video_core/rasterizer_interface.h"
 
@@ -64,7 +65,32 @@ void OnBack(const Func& func) {
     }
 }
 
+namespace Peek = VideoCommon::Nx2AcquirePeek;
+
+// Unset or =0: every equal acquire drains. The heavy spot skipped none of them. =1 skips where
+// Decide allows it. =2 drains and warns where skipping would have gone on and the word after the
+// drain no longer meets it.
+static_assert(static_cast<size_t>(Peek::Verdict::Count) == 9);
+static_assert(static_cast<size_t>(Peek::Verdict::Untracked) == 8);
+
+Peek::Mode PeekMode() {
+    static const Peek::Mode mode = Peek::ParseMode(std::getenv("EDEN_NX2_ACQUIRE_PEEK"));
+    return mode;
+}
+
+Peek::Tracker& PeekTracker() {
+    static thread_local Peek::Tracker tracker;
+    return tracker;
+}
+
+// Set when =2 decided an equal acquire could skip, so the drain that follows can compare.
+thread_local bool peek_verify{};
+thread_local Peek::Verdict peek_verdict{Peek::Verdict::Unmet};
+
 void DrainBack() {
+    if (PeekMode() != Peek::Mode::Off) {
+        PeekTracker().Drained();
+    }
     VideoCommon::GpuSplit::Get().Drain(VideoCommon::DrainSite::Acquire);
 }
 
@@ -87,9 +113,15 @@ void NoteRelease(DmaPusher& dma_pusher, GPUVAddr address, u32 payload, bool four
         return;
     }
     split.NoteSemaphoreWrite(*device, payload, true);
+    if (PeekMode() != Peek::Mode::Off) {
+        PeekTracker().NoteRelease(*device, dma_pusher.channel_state.bind_id, payload, true);
+    }
     if (four_words) {
         // The payload as 64 bits (a timestamp follows).
         split.NoteSemaphoreWrite(*device + 4, 0, true);
+        if (PeekMode() != Peek::Mode::Off) {
+            PeekTracker().NoteRelease(*device + 4, dma_pusher.channel_state.bind_id, 0, false);
+        }
     }
 }
 
@@ -110,14 +142,54 @@ enum class AcquireCheck {
     Drain,       ///< Drain the split and read the word as before
 };
 
-// Checks a greater-or-equal acquire without draining the split. The words Switch 2 syncs on only
-// advance (NVN2 even releases QMD completions as maxima, KeplerCompute::ProcessNativeMethod), so
-// a value that meets one now still does once the back ran the queued work. Only the last release
-// the front sent to the word decides instead, when the back may not have run it yet.
+// The word an acquire would read once a GPU-written copy has been ruled out: guest memory, or the
+// mirrored release it does not hold yet.
+u32 ReadGuestSemaphore(DmaPusher& dma_pusher, GPUVAddr address, DAddr device) {
+    const u32 guest = dma_pusher.memory_manager.Read<u32>(address);
+    return Nx2MirrorShadow::Get().Read(device, guest).value_or(guest);
+}
+
+// An equal acquire the drain just resolved. Record the word so a later wait for a higher value
+// can skip, and (=2) warn if skipping would have passed a word the drain then missed.
+void PeekAfterDrain(DmaPusher& dma_pusher, const Puller::PendingAcquire& acquire, u32 current) {
+    if (PeekMode() == Peek::Mode::Off ||
+        acquire.operation != Peek::OpEqual) {
+        return;
+    }
+    if (const auto device = dma_pusher.memory_manager.GpuToCpuAddress(acquire.address)) {
+        auto& tracker = PeekTracker();
+        tracker.Observe(*device, current);
+        if (acquire.Matches(current)) {
+            tracker.Met(*device, dma_pusher.channel_state.bind_id, acquire.value);
+        }
+    }
+    if (!peek_verify) {
+        return;
+    }
+    peek_verify = false;
+    if (peek_verdict != Peek::Verdict::Skip || acquire.Matches(current)) {
+        return;
+    }
+    static u32 reported{};
+    if (++reported <= 16) {
+        LOG_WARNING(HW_GPU,
+                    "Acquire peek: channel {} semaphore {:#x} (== {:#x}) met in memory but not "
+                    "after the drain ({:#x})",
+                    dma_pusher.channel_state.bind_id, acquire.address, acquire.value, current);
+    }
+}
+
+// Greater-or-equal acquires skip the drain when guest memory or a queued release already meets
+// them. Equal acquires do too when EDEN_NX2_ACQUIRE_PEEK is on and Nx2AcquirePeek::Decide allows
+// it: the heavy spot drains about 8,700 of them a second, almost all equal or mask. A word seen
+// going down, a first wait on it, or a wait that does not advance keeps the drain. An unmet
+// equal acquire waits like a greater-or-equal one (the 1 ms valve) instead of draining every poll.
 AcquireCheck CheckWithoutDrain(DmaPusher& dma_pusher, const Puller::PendingAcquire& acquire) {
     auto& split = VideoCommon::GpuSplit::Get();
     auto& stats = VideoCommon::g_acquire_stats;
-    if (!acquire.WaitsToReach()) {
+    const bool equal = acquire.operation == Peek::OpEqual;
+    const Peek::Mode peek = PeekMode();
+    if (!acquire.WaitsToReach() && !(equal && peek != Peek::Mode::Off)) {
         VideoCommon::Count(stats.drain_operation);
         return AcquireCheck::Drain;
     }
@@ -138,9 +210,36 @@ AcquireCheck CheckWithoutDrain(DmaPusher& dma_pusher, const Puller::PendingAcqui
         VideoCommon::Count(stats.drain_queued);
         return AcquireCheck::Drain;
     }
-    return acquire.Matches(dma_pusher.memory_manager.Read<u32>(acquire.address))
-               ? AcquireCheck::Met
-               : AcquireCheck::NotMet;
+    if (!equal) {
+        return acquire.Matches(dma_pusher.memory_manager.Read<u32>(acquire.address))
+                   ? AcquireCheck::Met
+                   : AcquireCheck::NotMet;
+    }
+    const u32 raw = ReadGuestSemaphore(dma_pusher, acquire.address, *device);
+    auto& tracker = PeekTracker();
+    tracker.Observe(*device, raw);
+    const Peek::Verdict verdict =
+        tracker.Decide(*device, dma_pusher.channel_state.bind_id, Peek::OpEqual, acquire.value, raw);
+    VideoCommon::Count(stats.peek_verdicts[static_cast<size_t>(verdict)]);
+    if (peek == Peek::Mode::Verify) {
+        peek_verify = true;
+        peek_verdict = verdict;
+        VideoCommon::Count(stats.drain_operation);
+        return AcquireCheck::Drain;
+    }
+    if (verdict == Peek::Verdict::Skip) {
+        tracker.Met(*device, dma_pusher.channel_state.bind_id, acquire.value);
+        // The word was written on the back after the work before its release. Later reads of
+        // guest memory stay after this one.
+        std::atomic_thread_fence(std::memory_order_acquire);
+        VideoCommon::Count(stats.peek_skipped);
+        return AcquireCheck::Met;
+    }
+    if (verdict == Peek::Verdict::Unmet) {
+        return AcquireCheck::NotMet;
+    }
+    VideoCommon::Count(stats.drain_operation);
+    return AcquireCheck::Drain;
 }
 
 // EDEN_NX2_ACQUIRE_VERIFY=1: drains anyway and counts where the word after the drain disagrees
@@ -238,6 +337,7 @@ bool Puller::CanResumeAcquire(DmaPusher& dma_pusher) {
     // ReadSemaphoreWord asks are its state).
     DrainBack();
     const u32 current = ReadSemaphoreWord(dma_pusher, pending_acquire->address);
+    PeekAfterDrain(dma_pusher, *pending_acquire, current);
     if (Nx2SemaphoreWaiters::Get().Latched(this)) {
         if (static std::atomic<u32> rescued{};
             !pending_acquire->Matches(current) && rescued.fetch_add(1) < 64) {
@@ -443,7 +543,9 @@ void Puller::ProcessSemaphoreTriggerMethod(DmaPusher& dma_pusher) {
         }
         VideoCommon::Count(stats.drained);
         DrainBack();
-        if (acquire.Matches(ReadSemaphoreWord(dma_pusher, acquire.address))) {
+        const u32 current = ReadSemaphoreWord(dma_pusher, acquire.address);
+        PeekAfterDrain(dma_pusher, acquire, current);
+        if (acquire.Matches(current)) {
             return;
         }
         // Registered before the fences run, so a release among them that meets the value counts

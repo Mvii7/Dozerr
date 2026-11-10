@@ -600,10 +600,19 @@ void MemoryManager::WriteBlock(GPUVAddr gpu_dest_addr, const void* src_buffer, s
 }
 
 void MemoryManager::WriteBlockUnsafe(GPUVAddr gpu_dest_addr, const void* src_buffer, std::size_t size) {
+    if (size != 0) {
+        for (GPUVAddr page = gpu_dest_addr & ~GPUVAddr{0xfff}; page < gpu_dest_addr + size;
+             page += 0x1000) {
+            if (const std::optional<DAddr> device = GpuToCpuAddress(page)) {
+                Tegra::Nx2MarkUntrackedWrite(*device, 1);
+            }
+        }
+    }
     WriteBlockImpl(gpu_dest_addr, src_buffer, size, VideoCommon::CacheType::None, true);
 }
 
 void MemoryManager::WriteBlockCached(GPUVAddr gpu_dest_addr, const void* src_buffer, std::size_t size) {
+    CountCachedWrite();
     WriteBlockImpl(gpu_dest_addr, src_buffer, size, VideoCommon::CacheType::None, true);
     accumulator.Add(gpu_dest_addr, size);
 }
@@ -613,11 +622,17 @@ void MemoryManager::WriteWordsCached(GPUVAddr gpu_dest_addr, const u32* words, s
     // Words on Switch 2 sparse memory go one at a time, as Nx2BackSparseWrite saw them.
     if (gpu_dest_addr + size > Tegra::g_nx2_sparse_low.load(std::memory_order_relaxed) &&
         gpu_dest_addr < Tegra::g_nx2_sparse_high.load(std::memory_order_relaxed)) {
+        // One counted write for the whole call. WriteBlockCached would count each word, and a
+        // light draw with uniforms would then see extra cached writes and refuse.
+        CountCachedWrite();
         for (std::size_t i = 0; i < count; ++i) {
-            WriteBlockCached(gpu_dest_addr + i * sizeof(u32), words + i, sizeof(u32));
+            WriteBlockImpl(gpu_dest_addr + i * sizeof(u32), words + i, sizeof(u32),
+                           VideoCommon::CacheType::None, true);
+            accumulator.Add(gpu_dest_addr + i * sizeof(u32), sizeof(u32));
         }
         return;
     }
+    CountCachedWrite();
     WriteBlockImpl(gpu_dest_addr, words, size, VideoCommon::CacheType::None, true);
     // The accumulator merges word by word differently from one range: keep its ranges.
     for (std::size_t i = 0; i < count; ++i) {
