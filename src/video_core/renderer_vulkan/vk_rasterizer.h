@@ -400,6 +400,9 @@ private:
         u64 record_count{};
         u64 cpu_epoch{};
         u64 deletions{};
+        /// Cached writes, and the constant-buffer ones among them (EDEN_NX2_LIGHT_UNIFORM).
+        u64 cached_ops{};
+        u64 const_ops{};
     };
     /// Why a delta draw was not a light draw.
     enum class LightRefusal : u8 {
@@ -443,6 +446,10 @@ private:
     struct FastDrawStats {
         u64 delta{};
         u64 light{}; ///< Delta draws that only updated the geometry buffers (LIGHT_DELTA)
+        u64 light_uniform{}; ///< Delta draws that also refreshed uniform buffers (LIGHT_UNIFORM)
+        /// Of the constant-buffer refusals: another cached write, or storage/texture data.
+        u64 uniform_other{};
+        u64 uniform_buffers{};
         std::array<u64, static_cast<size_t>(LightRefusal::Count)> light_refused{};
         std::array<u64, static_cast<size_t>(FullDraw::Count)> full{};
         std::array<u64, static_cast<size_t>(Ineligible::Count)> ineligible{};
@@ -479,6 +486,13 @@ private:
     /// buffers and records the draw (EDEN_NX2_LIGHT_DELTA, ported in spirit from Dozer's light
     /// draw). False when it must set up in full; what it bound then stays valid.
     [[nodiscard]] bool TryLightDelta(GraphicsPipeline* pipeline, bool is_indexed, u64 cpu_epoch);
+    /// A delta draw whose only extra change is constant-buffer data that does not touch storage
+    /// or texture buffers: ConfigureDelta without reading or synchronizing those buffers
+    /// (EDEN_NX2_LIGHT_UNIFORM). `epoch_before_flush` is the CPU-set epoch before this draw's
+    /// FlushCaching. NotTaken falls through to ConfigureDelta; Failed means that call failed.
+    enum class LightUniformAttempt : u8 { NotTaken, Configured, Failed };
+    [[nodiscard]] LightUniformAttempt TryLightUniform(GraphicsPipeline* pipeline, bool is_indexed,
+                                                      u64 epoch_before_flush);
     void ReportFastDraws();
     ReusableDraw reusable_draw;
     ReusableDraw taken_draw; ///< The draw TakeReusableDraw last returned the pipeline of

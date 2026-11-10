@@ -3445,7 +3445,9 @@ private:
     void FinishFrontMacro(Core::System& system);
     void FrontIndirectDraw(Core::System& system, VideoCommon::GpuSplit& split, FrontState& state,
                            GPUVAddr record);
-    void BackDrawIndexedIndirect(Core::System& system, u32 topology, GPUVAddr record);
+    /// `count` records, `stride` bytes apart, from `record` (FrontIndirectDraw merges calls).
+    void BackDrawIndexedIndirect(Core::System& system, u32 topology, GPUVAddr record, u32 count,
+                                 u32 stride);
     std::unique_ptr<FrontState> front;
     bool front_macros{};
     // EDEN_NX2_SPLIT_VERIFY: the last SET_SHADOW_RAM_CONTROL writes each side saw (argument,

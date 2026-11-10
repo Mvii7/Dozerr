@@ -576,6 +576,8 @@ void RasterizerVulkan::NoteResolvedDraw(GraphicsPipeline* pipeline, bool is_inde
         .record_count = scheduler.RecordCount(),
         .cpu_epoch = cpu_epoch,
         .deletions = buffer_cache.BufferDeletionCount(),
+        .cached_ops = gpu_memory->CachedWriteOps(),
+        .const_ops = gpu_memory->ConstBufferWriteOps(),
     };
 }
 
@@ -597,8 +599,9 @@ bool RasterizerVulkan::TryLightDelta(GraphicsPipeline* pipeline, bool is_indexed
     // pass are what the command buffer holds), no CPU write to memory the cache tracks (so no
     // buffer needs an upload), and no buffer deleted. A draw that writes storage buffers needs
     // their written ranges marked each time.
+    // Counted by TryLightUniform when that path does not take the draw either.
     if (!taken_delta.Empty()) {
-        return refuse(LightRefusal::DeltaBinds);
+        return false;
     }
     if (taken_draw.record_count != scheduler.RecordCount()) {
         return refuse(LightRefusal::Recorded);
@@ -623,6 +626,42 @@ bool RasterizerVulkan::TryLightDelta(GraphicsPipeline* pipeline, bool is_indexed
         return refuse(LightRefusal::Uploaded);
     }
     return true;
+}
+
+RasterizerVulkan::LightUniformAttempt RasterizerVulkan::TryLightUniform(
+    GraphicsPipeline* pipeline, bool is_indexed, u64 epoch_before_flush) {
+    static const bool enabled = [] {
+        const char* value = std::getenv("EDEN_NX2_LIGHT_UNIFORM");
+        return value == nullptr || value[0] != '0';
+    }();
+    const auto refuse = [&](bool buffers) {
+        ++fast_draw_stats.light_refused[static_cast<size_t>(LightRefusal::DeltaBinds)];
+        if (buffers) {
+            ++fast_draw_stats.uniform_buffers;
+        } else {
+            ++fast_draw_stats.uniform_other;
+        }
+        return LightUniformAttempt::NotTaken;
+    };
+    if (!enabled) {
+        ++fast_draw_stats.light_refused[static_cast<size_t>(LightRefusal::DeltaBinds)];
+        return LightUniformAttempt::NotTaken;
+    }
+    if (pipeline->WritesStorage() || taken_draw.record_count != scheduler.RecordCount() ||
+        taken_draw.deletions != buffer_cache.BufferDeletionCount() ||
+        epoch_before_flush != taken_draw.cpu_epoch ||
+        gpu_memory->CachedWriteOps() - taken_draw.cached_ops !=
+            gpu_memory->ConstBufferWriteOps() - taken_draw.const_ops) {
+        return refuse(false);
+    }
+    if (!pipeline->LightUniformDescriptorsStay(taken_delta) ||
+        !buffer_cache.LightUniformRangesStay(taken_delta)) {
+        return refuse(true);
+    }
+    buffer_cache.reuse_untouched_buffers = true;
+    const bool configured = pipeline->ConfigureDelta(is_indexed);
+    buffer_cache.reuse_untouched_buffers = false;
+    return configured ? LightUniformAttempt::Configured : LightUniformAttempt::Failed;
 }
 
 void RasterizerVulkan::ReportFastDraws() {
@@ -667,9 +706,13 @@ void RasterizerVulkan::ReportFastDraws() {
             }
         }
         LOG_INFO(Render_Vulkan,
-                 "Light delta draws per second: {:.0f} light | delta draws that were not:{}",
+                 "Light delta draws per second: {:.0f} plain, {:.0f} uniform | delta draws that "
+                 "were not:{} | uniform not taken: other writes {:.0f}, storage or texture {:.0f}",
                  static_cast<double>(stats.light) / seconds,
-                 refused.empty() ? std::string{" none"} : refused);
+                 static_cast<double>(stats.light_uniform) / seconds,
+                 refused.empty() ? std::string{" none"} : refused,
+                 static_cast<double>(stats.uniform_other) / seconds,
+                 static_cast<double>(stats.uniform_buffers) / seconds);
     }
     static constexpr std::array<const char*, static_cast<size_t>(Ineligible::Count)>
         ineligible_names{"indirect",       "mesh",          "not built",     "writes images",
@@ -867,6 +910,8 @@ void RasterizerVulkan::PrepareDraw(bool is_indexed, Func&& draw_func, bool is_in
     }
     fast_draw_verify = fast_draw_on && FastDraw::VerifyEnabled();
     const u64 fast_draw_start = fast_draw_on ? Profile::Now() : 0;
+    // Before FlushCaching marks the constant-buffer writes queued since the previous draw.
+    const u64 epoch_before_flush = buffer_cache.CpuSetEpoch();
     {
         Profile::Scope scope{Profile::Zone::FlushWork};
         FlushWork();
@@ -1104,12 +1149,24 @@ void RasterizerVulkan::PrepareDraw(bool is_indexed, Func&& draw_func, bool is_in
     const DrawPath path = delta_holds && !verify_pipeline ? DrawPath::Delta : DrawPath::Full;
     const bool light_delta = path == DrawPath::Delta && !repack_dirty &&
                              TryLightDelta(pipeline, is_indexed, draw_cpu_epoch);
+    LightUniformAttempt light_uniform = LightUniformAttempt::NotTaken;
     if (!light_delta) {
         buffer_cache.BeginGraphicsUniforms(path == DrawPath::Delta ? &taken_delta : nullptr);
+        if (path == DrawPath::Delta && !repack_dirty && !taken_delta.Empty()) {
+            light_uniform = TryLightUniform(pipeline, is_indexed, epoch_before_flush);
+            if (light_uniform == LightUniformAttempt::Failed) {
+                report_failure("configure failed");
+                TraceRenderState(is_indexed, "configure-failed", nullptr);
+                return;
+            }
+        }
     }
     if (light_delta) {
         ++fast_draw_stats.delta;
         ++fast_draw_stats.light;
+    } else if (light_uniform == LightUniformAttempt::Configured) {
+        ++fast_draw_stats.delta;
+        ++fast_draw_stats.light_uniform;
     } else if (path == DrawPath::Delta) {
         if (Profile::Scope scope{Profile::Zone::Configure}; !pipeline->ConfigureDelta(is_indexed)) {
             report_failure("configure failed");

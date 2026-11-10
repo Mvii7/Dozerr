@@ -126,6 +126,22 @@ public:
     /// WriteBlockCached of `count` consecutive words within one device page, in a single write.
     void WriteWordsCached(GPUVAddr gpu_dest_addr, const u32* words, std::size_t count);
 
+    /// Cached writes since boot, and how many of them were constant-buffer data
+    /// (Maxwell3D::ProcessCBMultiData / CallConstBufferWords). A light draw with uniforms
+    /// (EDEN_NX2_LIGHT_UNIFORM) allows the second and not the first.
+    void CountCachedWrite() noexcept {
+        cached_write_ops.fetch_add(1, std::memory_order_relaxed);
+    }
+    void CountConstBufferWrite() noexcept {
+        const_buffer_write_ops.fetch_add(1, std::memory_order_relaxed);
+    }
+    [[nodiscard]] u64 CachedWriteOps() const noexcept {
+        return cached_write_ops.load(std::memory_order_relaxed);
+    }
+    [[nodiscard]] u64 ConstBufferWriteOps() const noexcept {
+        return const_buffer_write_ops.load(std::memory_order_relaxed);
+    }
+
     /**
      * Checks if a gpu region can be simply read with a pointer.
      */
@@ -308,6 +324,8 @@ private:
 
     const size_t unique_identifier;
     VideoCommon::InvalidationAccumulator accumulator;
+    std::atomic<u64> cached_write_ops{};
+    std::atomic<u64> const_buffer_write_ops{};
 
     static std::atomic<size_t> unique_identifier_generator;
 

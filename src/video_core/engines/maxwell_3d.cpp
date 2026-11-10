@@ -701,6 +701,7 @@ void Maxwell3D::CallConstBufferWords(Core::System& system, const u32* methods,
     if (VideoCommon::Nx2FastDraw::Enabled()) {
         NoteFastDrawConstantData(address + offset, address + offset + bytes);
     }
+    memory_manager.CountConstBufferWrite();
     memory_manager.WriteWordsCached(address + offset, values.data(), count);
     regs.const_buffer.offset += static_cast<u32>(bytes);
 }
@@ -1083,6 +1084,7 @@ void Maxwell3D::ProcessCBMultiData(const u32* start_base, u32 amount) {
         if (VideoCommon::Nx2FastDraw::Enabled()) {
             NoteFastDrawConstantData(address, address + write_size);
         }
+        memory_manager.CountConstBufferWrite();
         memory_manager.WriteBlockCached(address, start_base, write_size);
     }
     if (write_size != copy_size) {
@@ -1201,6 +1203,14 @@ struct Maxwell3D::FrontState {
     std::unordered_map<u32, IndirectCheck> indirect_checks;
     u64 indirect_generation{~0ULL};
     std::vector<std::pair<u32, u32>> checked_writes; ///< The writes of a call being checked
+    /// The last FrontIndirectDraw while the back cannot see it yet: ring position `start`,
+    /// then the macro's resets, up to `end`.
+    struct HeldIndirectDraw {
+        u64* payload{};
+        u64 start{};
+        u64 end{};
+        u64 session{};
+    } held_indirect;
 };
 
 namespace {
@@ -1222,10 +1232,35 @@ bool HleIndirectEnabled() {
     return enabled;
 }
 
+// EDEN_NX2_INDIRECT_BATCH=0: one host draw per HLE indirect call. On, calls whose records follow
+// each other in memory share one vkCmdDrawIndexedIndirect. HLE is what makes that possible: the
+// GPU reads every record, and each draw's base vertex and instance come from its own record.
+bool IndirectBatchEnabled() {
+    static const bool enabled = [] {
+        const char* value = std::getenv("EDEN_NX2_INDIRECT_BATCH");
+        return value == nullptr || value[0] != '0';
+    }();
+    return enabled;
+}
+
 // Topologies an indirect draw takes as they are (HLE_DrawIndexedIndirect's IsTopologySafe).
 bool IndirectTopologySafe(u32 topology) {
     return topology <= 6 || (topology >= 0xa && topology <= 0xe);
 }
+
+// What the back runs for FrontIndirectDraw: `count` records `stride` bytes apart.
+struct IndirectDrawCall {
+    Maxwell3D* engine;
+    Core::System* system;
+    GPUVAddr record;
+    u32 topology;
+    u32 count;
+    u32 stride;
+
+    void operator()() const {
+        engine->BackDrawIndexedIndirect(*system, topology, record, count, stride);
+    }
+};
 
 // The writes NVN's indexed indirect draw macro makes for its parameters {topology, index count,
 // instance count 1, first index, base vertex, base instance}: index_buffer.first, vertex_id_base,
@@ -2246,18 +2281,50 @@ bool Maxwell3D::FrontTakeIndirectRecord(Core::System& system, VideoCommon::GpuSp
 void Maxwell3D::FrontIndirectDraw(Core::System& system, VideoCommon::GpuSplit& split,
                                   FrontState& fs, GPUVAddr record) {
     static std::atomic<u64> draws{};
-    if (const u64 count = draws.fetch_add(1, std::memory_order_relaxed) + 1;
-        (count & (count - 1)) == 0 && count >= 1024) {
-        LOG_INFO(HW_GPU, "HLE indirect draws: {} so far (the host GPU read their records)", count);
+    static std::atomic<u64> merged{};
+    const u64 count_so_far = draws.fetch_add(1, std::memory_order_relaxed) + 1;
+    if ((count_so_far & (count_so_far - 1)) == 0 && count_so_far >= 1024) {
+        LOG_INFO(HW_GPU,
+                 "HLE indirect draws: {} so far, {} joined the call before them (one host draw)",
+                 count_so_far, merged.load(std::memory_order_relaxed));
     }
     const u32 topology = fs.parameters[0];
-    // The call is the draw itself, like FinishFrontMacro: it leaves the next draw's resolve
-    // as it was (the HLE replacement is set and cleared around it, and fast draws only reuse an
-    // HLE draw for another one), so it doesn't end fast draw reuse.
-    split.Defer([this, system_ptr = &system, topology, record] {
-        BackDrawIndexedIndirect(*system_ptr, topology, record);
-    }, VideoCommon::GpuSplit::FastDrawNeutral);
     fs.draw_pending = false;
+    // NVN calls the macro once per record, with nothing between the calls. While the last call
+    // is still invisible to the back and nothing followed it but its resets, a record that comes
+    // next in memory joins it: one draw setup on the back, and one vkCmdDrawIndexedIndirect.
+    // The resets are not repeated. They write the same registers, and each draw reads its base
+    // vertex and instance from its own record (BackDrawIndexedIndirect).
+    auto& held = fs.held_indirect;
+    if (held.payload != nullptr && IndirectBatchEnabled() && held.session == split.Session() &&
+        held.end == split.WritePosition() && !split.Published(held.start)) {
+        IndirectDrawCall call;
+        std::memcpy(&call, held.payload, sizeof(call));
+        constexpr u32 RecordSize = 5 * sizeof(u32);
+        constexpr u32 MaxStride = 256;
+        constexpr u32 MaxCount = 256;
+        const u64 distance = record - call.record;
+        const bool follows =
+            record > call.record &&
+            (call.count == 1 ? distance >= RecordSize && distance <= MaxStride && distance % 4 == 0
+                             : distance == u64{call.count} * call.stride);
+        if (call.topology == topology && call.count < MaxCount && follows) {
+            if (call.count == 1) {
+                call.stride = static_cast<u32>(distance);
+            }
+            ++call.count;
+            std::memcpy(held.payload, &call, sizeof(call));
+            merged.fetch_add(1, std::memory_order_relaxed);
+            return;
+        }
+    }
+    held = {};
+    u64 start{};
+    // The call is the draw itself. FastDrawNeutral: the HLE replacement is set and cleared
+    // around it, so it does not end fast-draw reuse.
+    u64* const payload = split.DeferEditable(
+        IndirectDrawCall{this, &system, record, topology, 1, 0}, start,
+        VideoCommon::GpuSplit::FastDrawNeutral);
     // The state the macro leaves behind (the end of IndirectDrawWrites). index_buffer.first and
     // index_buffer.count keep their values: the macro would leave the record's in them.
     static constexpr std::array<std::pair<u32, u32>, 6> resets{
@@ -2265,9 +2332,11 @@ void Maxwell3D::FrontIndirectDraw(Core::System& system, VideoCommon::GpuSplit& s
     for (const auto& [address, value] : resets) {
         FrontWrite(split, fs, address, value, true, true);
     }
+    held = {payload, start, split.WritePosition(), split.Session()};
 }
 
-void Maxwell3D::BackDrawIndexedIndirect(Core::System& system, u32 topology, GPUVAddr record) {
+void Maxwell3D::BackDrawIndexedIndirect(Core::System& system, u32 topology, GPUVAddr record,
+                                        u32 count, u32 stride) {
     // What CallMacroMethod does around a macro.
     ConsumeSink(system);
     draw_manager.DrawDeferred(*this);
@@ -2286,9 +2355,9 @@ void Maxwell3D::BackDrawIndexedIndirect(Core::System& system, u32 topology, GPUV
     params.include_count = false;
     params.count_start_address = 0;
     params.indirect_start_address = record;
-    params.buffer_size = 5 * sizeof(u32);
-    params.max_draw_counts = 1;
-    params.stride = 0;
+    params.buffer_size = size_t{count - 1} * stride + 5 * sizeof(u32);
+    params.max_draw_counts = count;
+    params.stride = count > 1 ? stride : 0;
     draw_manager.DrawIndexedIndirect(*this, static_cast<Regs::PrimitiveTopology>(topology), 0,
                                      estimate);
     engine_state = EngineHint::None;

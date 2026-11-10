@@ -326,6 +326,11 @@ public:
     /// can't be recorded, as for Configure.
     bool ConfigureDelta(bool is_indexed);
 
+    /// EDEN_NX2_LIGHT_UNIFORM: constant-buffer writes in `delta` do not change a storage, texture
+    /// or image buffer descriptor this pipeline reads, and no such slot was bound again.
+    [[nodiscard]] bool LightUniformDescriptorsStay(
+        const VideoCommon::Nx2FastDraw::Delta& delta) const;
+
     /// The next Configure keeps the views and samplers it resolves for delta draws. With
     /// `verify`, it first compares them with the ones kept before; DeltaMismatch reports it.
     void CaptureNextDelta(bool verify) noexcept {

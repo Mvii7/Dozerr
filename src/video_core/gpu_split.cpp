@@ -144,6 +144,7 @@ void GpuSplit::Stop() {
     // wrap at a time and never reached the old write position (the next game's first GPU work
     // never ran, it waited on its syncpoint forever), and the engines it held were freed.
     ring.reset();
+    ++session;
     write_position = 0;
     last_writer_position = 0;
     last_sync_position = 0;

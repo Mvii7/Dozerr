@@ -17,6 +17,7 @@
 #include <boost/container/static_vector.hpp>
 #include <fmt/format.h>
 
+#include "video_core/nx2_fast_draw.h"
 #include "video_core/renderer_vulkan/pipeline_build_failure.h"
 #include "video_core/renderer_vulkan/pipeline_build_trace.h"
 #include "video_core/renderer_vulkan/pipeline_helper.h"
@@ -1115,12 +1116,68 @@ bool GraphicsPipeline::DeltaImagesChange() const noexcept {
     return texture_cache.SampledViewsChange(delta_views);
 }
 
+bool GraphicsPipeline::LightUniformDescriptorsStay(
+    const VideoCommon::Nx2FastDraw::Delta& delta) const {
+    VideoCommon::Nx2FastDraw::DeviceSpans spans;
+    const auto slot_written = [&](size_t stage, u32 index, u32 offset, u64 bytes) {
+        const auto& cbufs = maxwell3d->state.shader_stages[stage].const_buffers;
+        if (index >= cbufs.size() || ((delta.binds[stage] >> index) & 1U) != 0) {
+            return true;
+        }
+        const auto& cbuf = cbufs[index];
+        if (!cbuf.enabled) {
+            return false;
+        }
+        if (delta.Reaches(cbuf.address + offset, bytes, spans)) {
+            return true;
+        }
+        // The write may use another GPU address for the same device memory.
+        const auto device = gpu_memory->GpuToCpuAddress(cbuf.address + offset, bytes);
+        if (!device) {
+            return true;
+        }
+        const DAddr end = *device + bytes;
+        for (u32 write = 0; write < delta.num_device_writes; ++write) {
+            if (delta.device_begin[write] < end && *device < delta.device_end[write]) {
+                return true;
+            }
+        }
+        return false;
+    };
+    for (size_t stage = 0; stage < NUM_STAGES; ++stage) {
+        if (!configured_stages[stage]) {
+            continue;
+        }
+        const Shader::Info& info = stage_infos[stage];
+        for (const auto& desc : info.storage_buffers_descriptors) {
+            if (desc.count != 1 || desc.indirect_offset != ~0U ||
+                slot_written(stage, desc.cbuf_index, desc.cbuf_offset, 16)) {
+                return false;
+            }
+        }
+        for (const auto& desc : info.texture_buffer_descriptors) {
+            if (desc.count != 1 || desc.handle_program != ~0U || desc.has_secondary ||
+                slot_written(stage, desc.cbuf_index, desc.cbuf_offset, 16)) {
+                return false;
+            }
+        }
+        for (const auto& desc : info.image_buffer_descriptors) {
+            if (desc.count != 1 || desc.handle_program != ~0U ||
+                slot_written(stage, desc.cbuf_index, desc.cbuf_offset, 16)) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
 bool GraphicsPipeline::ConfigureDelta(bool is_indexed) {
     namespace Profile = VideoCommon::Nx2Profile;
     // ConfigureImpl without reading handles and resolving image views, samplers and texture
     // buffers: the buffers are resolved, synchronized and bound as it does.
+    // EDEN_NX2_LIGHT_UNIFORM leaves the storage bindings the previous draw resolved.
     buffer_cache.SetUniformBuffersState(enabled_uniform_buffer_masks, &uniform_buffer_sizes);
-    {
+    if (!buffer_cache.reuse_untouched_buffers) {
         Profile::Scope scope{Profile::Zone::ReadHandles};
         for (size_t stage = 0; stage < NUM_STAGES; ++stage) {
             if (!configured_stages[stage]) {

@@ -561,6 +561,15 @@ public:
     /// every other buffer binding the draw before it left.
     void UpdateGeometryBuffers(bool is_indexed);
 
+    /// EDEN_NX2_LIGHT_UNIFORM: the constant-buffer writes in `delta` do not land in a bound
+    /// storage or texture buffer, and none of those buffers is written by the shader or split
+    /// across GPU mappings. The draw can keep the bindings the previous one resolved.
+    [[nodiscard]] bool LightUniformRangesStay(const Nx2FastDraw::Delta& delta) const;
+
+    /// Set for the ConfigureDelta of a light draw with uniforms: storage and texture buffers are
+    /// not looked up or synchronized again (their descriptors are still recorded).
+    bool reuse_untouched_buffers = false;
+
     /// Called before each graphics draw binds its buffers (uniform keeps). `delta`: the constant
     /// buffer binds and data since the previous draw when it is a fast draw delta draw, else
     /// nullptr.
