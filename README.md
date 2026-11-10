@@ -13,7 +13,7 @@ Dozerr is a Nintendo Switch 2 emulator tuned for **Donkey Kong Bananza**. It is 
 fork of [Lichii](https://github.com/zortos293/Lichii), which builds on Eglantine, Eden, yuzu and
 Sudachi. It is not affiliated with Nintendo, with Lichii or with any of those projects.
 
-Dozerr is in early development. Support is very limited, and only Donkey Kong Bananza is tuned.
+Dozerr is in early development. Support is very limited.
 
 ## Where this comes from
 
