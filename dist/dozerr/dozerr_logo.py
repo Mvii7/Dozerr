@@ -136,6 +136,12 @@ def render_banner(width=1600, height=400):
     gap = int(h * 0.10)
     group_w = icon_size + gap + (box[2] - box[0])
     left = (w - group_w) // 2
+    # The tile is nearly the panel's colour, so centre what shows: the yellow D and the name.
+    ink = [p for p in icon.getdata()]
+    xs = [i % icon_size for i, p in enumerate(ink) if p[0] > 200 and p[1] > 150 and p[2] < 80]
+    ink_left = min(xs)
+    visible_w = (icon_size + gap + (box[2] - box[0])) - ink_left
+    left = (w - visible_w) // 2 - ink_left
     panel.alpha_composite(icon, (left, (h - icon_size) // 2))
     text_x = left + icon_size + gap - box[0]
     text_y = (h - (box[3] - box[1])) // 2 - box[1]
