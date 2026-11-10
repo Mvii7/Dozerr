@@ -2251,9 +2251,12 @@ void Maxwell3D::FrontIndirectDraw(Core::System& system, VideoCommon::GpuSplit& s
         LOG_INFO(HW_GPU, "HLE indirect draws: {} so far (the host GPU read their records)", count);
     }
     const u32 topology = fs.parameters[0];
+    // The call is the draw itself, like FinishFrontMacro: it leaves the next draw's resolve
+    // as it was (the HLE replacement is set and cleared around it, and fast draws only reuse an
+    // HLE draw for another one), so it doesn't end fast draw reuse.
     split.Defer([this, system_ptr = &system, topology, record] {
         BackDrawIndexedIndirect(*system_ptr, topology, record);
-    });
+    }, VideoCommon::GpuSplit::FastDrawNeutral);
     fs.draw_pending = false;
     // The state the macro leaves behind (the end of IndirectDrawWrites). index_buffer.first and
     // index_buffer.count keep their values: the macro would leave the record's in them.
