@@ -1622,6 +1622,7 @@ u64 BufferCache<P>::KeptGraphicsBindingsHash(bool vertex, bool storage, bool tex
 
 template <class P>
 void BufferCache<P>::BindHostGeometryBuffers(bool is_indexed) {
+    Nx2Profile::Scope scope{Nx2Profile::Zone::BufBindGeometry};
     if (is_indexed) {
         BindHostIndexBuffer();
     } else if constexpr (!HAS_FULL_INDEX_AND_PRIMITIVE_SUPPORT) {
@@ -2937,19 +2938,29 @@ void BufferCache<P>::DoUpdateGraphicsBuffers(bool is_indexed) {
     graphics_segments.clear();
     BufferOperations([&]() {
         if (is_indexed) {
+            Nx2Profile::Scope scope{Nx2Profile::Zone::BufIndex};
             UpdateIndexBuffer();
         }
-        UpdateVertexBuffers();
+        {
+            Nx2Profile::Scope scope{Nx2Profile::Zone::BufVertex};
+            UpdateVertexBuffers();
+        }
         UpdateTransformFeedbackBuffers();
-        for (size_t stage = 0; stage < NUM_STAGES; ++stage) {
-            UpdateUniformBuffers(stage);
-            UpdateStorageBuffers(stage);
-            UpdateTextureBuffers(stage);
+        {
+            Nx2Profile::Scope scope{Nx2Profile::Zone::BufStages};
+            for (size_t stage = 0; stage < NUM_STAGES; ++stage) {
+                UpdateUniformBuffers(stage);
+                UpdateStorageBuffers(stage);
+                UpdateTextureBuffers(stage);
+            }
         }
         if (current_draw_indirect) {
             UpdateDrawIndirect();
         }
-        RefreshMultiRangeSegments(graphics_segments);
+        {
+            Nx2Profile::Scope scope{Nx2Profile::Zone::BufSegments};
+            RefreshMultiRangeSegments(graphics_segments);
+        }
     });
 }
 
