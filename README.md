@@ -54,7 +54,7 @@ The Dozerr mark is a D whose flat edge is a bulldozer blade. It is drawn by
 
 Dozerr inherits the work of the Lichii, Eglantine, Eden, yuzu and Sudachi projects and their
 contributors, including Eglantine's original developer Camille LaVey, and the work of Anka
-(EddizEge) that Dozer was built on. Original copyright notices and third-party license files are
+(EddizEge). Original copyright notices and third-party license files are
 kept in the source tree.
 
 See [LICENSE.txt](LICENSE.txt) and the source files for the applicable license terms.
