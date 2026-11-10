@@ -219,6 +219,7 @@ bool DmaPusher::Step() {
         }
         bool gpu_written = IsGpuWrittenCommands(dma_state.dma_get,
                                                  size_t{header.size} * sizeof(u32));
+        bool indirect_record = false; ///< The host GPU reads this entry itself (see below)
         if (subchannels[dma_state.subchannel] && dma_state.method_count) {
             const auto engine = subchannel_type[dma_state.subchannel];
             const bool kepler_payload = engine == Engines::EngineTypes::KeplerCompute && dma_state.method == ComputeInline && dma_state.non_incrementing;
@@ -226,6 +227,16 @@ bool DmaPusher::Step() {
             if (kepler_payload || macro_payload) {
                 const size_t words = std::min<size_t>(dma_state.method_count, header.size);
                 auto* const engine_state = subchannels[dma_state.subchannel];
+                // NVN's indexed indirect draw macro, continued by a record the GPU wrote: the
+                // host GPU reads the record itself, so the words are not read back
+                // (Maxwell3D::FrontTakeIndirectRecord).
+                if (macro_payload && gpu_written && words == 5 && dma_state.method_count == 5 &&
+                    header.size == 5 && VideoCommon::GpuSplit::Get().Active()) {
+                    indirect_record =
+                        static_cast<Engines::Maxwell3D*>(engine_state)
+                            ->FrontTakeIndirectRecord(system, VideoCommon::GpuSplit::Get(),
+                                                      dma_state.method, dma_state.dma_get);
+                }
                 if (auto& split = VideoCommon::GpuSplit::Get(); split.Active()) {
                     // The caches behind IsMemoryDirty belong to the split's back thread.
                     split.Defer([engine_state, memory = &memory_manager, address = GPUVAddr{dma_state.dma_get},
@@ -330,6 +341,15 @@ bool DmaPusher::Step() {
                 CheckLiveRead(live_read_reason, header, commands, submitted_copy);
             }
             Nx2CmdPageDiag::CountEntry(Nx2CmdPageDiag::Path::Safe);
+            command_resume_offset +=
+                ProcessCommands(commands.subspan(command_resume_offset), command_resume_offset);
+        } else if (indirect_record) {
+            // The record's words are not used: the macro's call draws from the record in GPU
+            // memory. Read as they are, with no copy and no wait.
+            Tegra::Memory::GpuGuestMemory<Tegra::CommandHeader, Tegra::Memory::GuestMemoryFlags::UnsafeRead>headers(memory_manager, dma_state.dma_get, header.size, &command_headers);
+            const std::span<const CommandHeader> commands{headers.data(), headers.size()};
+            RecordParsedEntry(header, commands);
+            Nx2CmdPageDiag::CountEntry(Nx2CmdPageDiag::Path::Slow);
             command_resume_offset +=
                 ProcessCommands(commands.subspan(command_resume_offset), command_resume_offset);
         } else if (bool pending = false;
