@@ -1248,20 +1248,6 @@ bool IndirectTopologySafe(u32 topology) {
     return topology <= 6 || (topology >= 0xa && topology <= 0xe);
 }
 
-// What the back runs for FrontIndirectDraw: `count` records `stride` bytes apart.
-struct IndirectDrawCall {
-    Maxwell3D* engine;
-    Core::System* system;
-    GPUVAddr record;
-    u32 topology;
-    u32 count;
-    u32 stride;
-
-    void operator()() const {
-        engine->BackDrawIndexedIndirect(*system, topology, record, count, stride);
-    }
-};
-
 // The writes NVN's indexed indirect draw macro makes for its parameters {topology, index count,
 // instance count 1, first index, base vertex, base instance}: index_buffer.first, vertex_id_base,
 // global_base_vertex_index and global_base_instance_index, the base vertex and instance into
@@ -2362,6 +2348,10 @@ void Maxwell3D::BackDrawIndexedIndirect(Core::System& system, u32 topology, GPUV
                                      estimate);
     engine_state = EngineHint::None;
     replace_table.clear();
+}
+
+void Maxwell3D::IndirectDrawCall::operator()() const {
+    engine->BackDrawIndexedIndirect(*system, topology, record, count, stride);
 }
 
 void Maxwell3D::FinishFrontMacro(Core::System& system) {

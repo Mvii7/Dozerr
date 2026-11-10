@@ -3448,6 +3448,17 @@ private:
     /// `count` records, `stride` bytes apart, from `record` (FrontIndirectDraw merges calls).
     void BackDrawIndexedIndirect(Core::System& system, u32 topology, GPUVAddr record, u32 count,
                                  u32 stride);
+    /// The split-ring payload for that call. A nested type so it can run the private draw.
+    struct IndirectDrawCall {
+        Maxwell3D* engine;
+        Core::System* system;
+        GPUVAddr record;
+        u32 topology;
+        u32 count;
+        u32 stride;
+
+        void operator()() const;
+    };
     std::unique_ptr<FrontState> front;
     bool front_macros{};
     // EDEN_NX2_SPLIT_VERIFY: the last SET_SHADOW_RAM_CONTROL writes each side saw (argument,
