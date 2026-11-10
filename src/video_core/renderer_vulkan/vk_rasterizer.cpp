@@ -762,6 +762,12 @@ void RasterizerVulkan::ReportFastDraws() {
                  per(stats.cb_data_matched), per(stats.cb_data_640), per(stats.cb_data_other),
                  per(stats.cb_address_changed), per(stats.cb_sample), per(stats.cb_sample_desc_stay),
                  per(stats.cb_sample_range_stay));
+        const u64 skips_now = maxwell3d->base_same_skips;
+        LOG_INFO(Render_Vulkan,
+                 "Base vertex and instance words not counted as a change: {:.0f}/s "
+                 "(EDEN_NX2_BASE_SAME=0 counts them)",
+                 static_cast<double>(skips_now - stats.base_same_cursor) / seconds);
+        stats.base_same_cursor = skips_now;
     }
     static constexpr std::array<const char*, static_cast<size_t>(Ineligible::Count)>
         ineligible_names{"indirect",       "mesh",          "not built",     "writes images",
@@ -833,7 +839,8 @@ void RasterizerVulkan::ReportFastDraws() {
     }
     LOG_INFO(Render_Vulkan, "Fast draw state changes per second by last break:{} | by method:{}",
              breaks, top);
-    stats = FastDrawStats{.window_start = now};
+    const u64 base_same_cursor = stats.base_same_cursor;
+    stats = FastDrawStats{.base_same_cursor = base_same_cursor, .window_start = now};
 }
 
 // Experimental adaptation of PokeDinner commit 76df4591a747: execute the reset shader's

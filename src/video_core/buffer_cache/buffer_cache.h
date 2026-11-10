@@ -1476,6 +1476,7 @@ bool BufferCache<P>::DMACopy(GPUVAddr src_address, GPUVAddr dest_address, u64 am
     Tegra::Memory::DeviceGuestMemoryScoped<u8, Tegra::Memory::GuestMemoryFlags::UnsafeReadWrite>
         tmp(device_memory, *cpu_src_address, amount, &tmp_buffer);
     tmp.SetAddressAndSize(*cpu_dest_address, amount);
+    Tegra::Nx2MarkUntrackedWrite(*cpu_dest_address, amount);
     return true;
 }
 
@@ -2134,6 +2135,7 @@ void BufferCache<P>::WriteDownloadedMemory(const Common::RangeSet<DAddr>& cpu_wr
         ForgetEarlyLanded(device_addr, size);
     }
     if (!cpu_written.Intersects(device_addr, size)) {
+        Tegra::Nx2MarkUntrackedWrite(device_addr, size);
         device_memory.WriteBlockUnsafe(device_addr, data, size);
         return;
     }
@@ -2143,6 +2145,7 @@ void BufferCache<P>::WriteDownloadedMemory(const Common::RangeSet<DAddr>& cpu_wr
         parts.Subtract(start, end - start);
     });
     parts.ForEach([&](DAddr start, DAddr end) {
+        Tegra::Nx2MarkUntrackedWrite(start, end - start);
         device_memory.WriteBlockUnsafe(start, data + (start - device_addr), end - start);
     });
 }

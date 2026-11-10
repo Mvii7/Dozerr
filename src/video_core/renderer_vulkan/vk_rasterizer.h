@@ -465,6 +465,8 @@ private:
         u64 cb_sample{};
         u64 cb_sample_desc_stay{};
         u64 cb_sample_range_stay{};
+        /// Maxwell3D::base_same_skips at the previous report.
+        u64 base_same_cursor{};
         std::array<u64, static_cast<size_t>(LightRefusal::Count)> light_refused{};
         std::array<u64, static_cast<size_t>(FullDraw::Count)> full{};
         std::array<u64, static_cast<size_t>(Ineligible::Count)> ineligible{};

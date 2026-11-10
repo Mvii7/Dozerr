@@ -651,6 +651,40 @@ void Maxwell3D::VerifyCallMethod(Core::System& system, u32 method, u32 method_ar
               shadow_state.reg_array[method], flag_differences);
 }
 
+namespace {
+
+// EDEN_NX2_BASE_SAME=0: a write of the base vertex or instance (c[0] offsets 0x640 and 0x644)
+// always counts as constant-buffer data, even when guest memory already holds the bytes.
+// Those words are what blocks the light path. The HLE indirect draw does not read them (it uses
+// replacement attributes), and a repeated write of the same bytes changes nothing a later draw
+// reads. A write that differs, or that lands on a GPU-written or untracked page, is made.
+bool BaseWordsUnchanged(Tegra::MemoryManager& memory, u32 offset, GPUVAddr address, const void* data,
+                        size_t size) {
+    static const bool enabled = [] {
+        const char* value = std::getenv("EDEN_NX2_BASE_SAME");
+        return value == nullptr || value[0] != '0';
+    }();
+    if (!enabled || size == 0 || offset < 0x640 || offset + size > 0x648) {
+        return false;
+    }
+    if ((address >> 12) != ((address + size - 1) >> 12)) {
+        return false;
+    }
+    if (address + size > Tegra::g_nx2_sparse_low.load(std::memory_order_relaxed) &&
+        address < Tegra::g_nx2_sparse_high.load(std::memory_order_relaxed)) {
+        return false;
+    }
+    const u8* const bytes = memory.GetSpan(address, size);
+    if (bytes == nullptr || std::memcmp(bytes, data, size) != 0) {
+        return false;
+    }
+    const std::optional<DAddr> device = memory.GpuToCpuAddress(address);
+    return device && !Tegra::Nx2MayBeGpuWritten(*device, size) &&
+           !Tegra::Nx2UntrackedWritten(*device, size);
+}
+
+} // namespace
+
 void Maxwell3D::CallConstBufferWords(Core::System& system, const u32* methods,
                                      const u32* arguments, u32 count) {
     const u32 offset = regs.const_buffer.offset;
@@ -698,11 +732,15 @@ void Maxwell3D::CallConstBufferWords(Core::System& system, const u32* methods,
     for (u32 i = 0; i < count; ++i) {
         ProcessDirtyRegisters(methods[i], ProcessShadowRam(methods[i], arguments[i]));
     }
-    if (VideoCommon::Nx2FastDraw::Enabled()) {
-        NoteFastDrawConstantData(address + offset, address + offset + bytes);
+    if (BaseWordsUnchanged(memory_manager, offset, address + offset, values.data(), bytes)) {
+        ++base_same_skips;
+    } else {
+        if (VideoCommon::Nx2FastDraw::Enabled()) {
+            NoteFastDrawConstantData(address + offset, address + offset + bytes);
+        }
+        memory_manager.CountConstBufferWrite();
+        memory_manager.WriteWordsCached(address + offset, values.data(), count);
     }
-    memory_manager.CountConstBufferWrite();
-    memory_manager.WriteWordsCached(address + offset, values.data(), count);
     regs.const_buffer.offset += static_cast<u32>(bytes);
 }
 
@@ -1099,11 +1137,16 @@ void Maxwell3D::ProcessCBMultiData(const u32* start_base, u32 amount) {
                 ++cb_probe.matched;
             }
         }
-        if (VideoCommon::Nx2FastDraw::Enabled()) {
-            NoteFastDrawConstantData(address, address + write_size);
+        if (BaseWordsUnchanged(memory_manager, regs.const_buffer.offset, address, start_base,
+                               write_size)) {
+            ++base_same_skips;
+        } else {
+            if (VideoCommon::Nx2FastDraw::Enabled()) {
+                NoteFastDrawConstantData(address, address + write_size);
+            }
+            memory_manager.CountConstBufferWrite();
+            memory_manager.WriteBlockCached(address, start_base, write_size);
         }
-        memory_manager.CountConstBufferWrite();
-        memory_manager.WriteBlockCached(address, start_base, write_size);
     }
     if (write_size != copy_size) {
         static std::atomic<bool> warned{};

@@ -3214,6 +3214,10 @@ public:
         }
     };
     ConstBufferProbe cb_probe{};
+    /// Base vertex and instance words (offsets 0x640 and 0x644) whose bytes were already in
+    /// memory, so they were not counted as a constant-buffer change. EDEN_NX2_BASE_SAME=0 counts
+    /// them again.
+    u64 base_same_skips{};
 
     /// Write the value to the register identified by method.
     void CallMethod(Core::System& system, u32 method, u32 method_argument, bool is_last_call) override;

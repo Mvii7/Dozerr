@@ -600,6 +600,14 @@ void MemoryManager::WriteBlock(GPUVAddr gpu_dest_addr, const void* src_buffer, s
 }
 
 void MemoryManager::WriteBlockUnsafe(GPUVAddr gpu_dest_addr, const void* src_buffer, std::size_t size) {
+    if (size != 0) {
+        for (GPUVAddr page = gpu_dest_addr & ~GPUVAddr{0xfff}; page < gpu_dest_addr + size;
+             page += 0x1000) {
+            if (const std::optional<DAddr> device = GpuToCpuAddress(page)) {
+                Tegra::Nx2MarkUntrackedWrite(*device, 1);
+            }
+        }
+    }
     WriteBlockImpl(gpu_dest_addr, src_buffer, size, VideoCommon::CacheType::None, true);
 }
 
