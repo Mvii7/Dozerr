@@ -18,3 +18,9 @@ Ported from Dozer (Anka's `86eafa98`, itself modelled on `HLE_DrawIndexedIndirec
 `EDEN_NX2_HLE_INDIRECT=0` turns it off and restores the copy-and-wait path. The log says
 `Macro at ... is NVN's indexed indirect draw` once the macro is recognized and prints a count of
 HLE draws at powers of two from 1024.
+
+## Related fixes carried over from Dozer
+
+- **Far terrain stripes** (`EDEN_NX2_BLIT_NATIVE_TILING=0` turns it off): the software 2D blit untiled and
+  tiled small mip copies in the Tegra X1 GOB order on Switch 2 titles; it now passes the native
+  tiling flag the DMA and texture paths already use (from Orchid `6a1bd310`).
