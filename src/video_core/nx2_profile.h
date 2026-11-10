@@ -76,7 +76,9 @@ enum class Zone : u32 {
     QueueSubmit,          ///< vkQueueSubmit
     BufIndex,             ///< Inside update buffers: the index buffer
     BufVertex,            ///< Inside update buffers: the vertex streams
-    BufStages,            ///< Inside update buffers: uniform, storage and texture buffers
+    BufStages,            ///< Inside update buffers: uniform buffers
+    BufStorage,           ///< Inside update buffers: storage buffers
+    BufTexture,           ///< Inside update buffers: texture buffers
     BufSegments,          ///< Inside update buffers: multi range segments
     BufBindGeometry,      ///< Inside update buffers: binding index and vertex buffers
     Count,
@@ -94,7 +96,7 @@ inline constexpr std::array<const char*, static_cast<size_t>(Zone::Count)> zone_
     "compute pipeline miss", "pipeline wait", "shader capture", "texture cache", "GPU wait",
     "present", "worker idle",
     "present wait", "queue submit",
-    "buf index", "buf vertex", "buf stages", "buf segments", "buf bind geometry",
+    "buf index", "buf vertex", "buf uniform", "buf storage", "buf texture", "buf segments", "buf bind geometry",
 };
 
 static_assert(static_cast<size_t>(Zone::Count) <= StutterTrace::ZoneSlots);
@@ -127,6 +129,8 @@ inline constexpr auto stutter_categories = [] {
     set(Zone::BufIndex, Category::BufferCache);
     set(Zone::BufVertex, Category::BufferCache);
     set(Zone::BufStages, Category::BufferCache);
+    set(Zone::BufStorage, Category::BufferCache);
+    set(Zone::BufTexture, Category::BufferCache);
     set(Zone::BufSegments, Category::BufferCache);
     set(Zone::BufBindGeometry, Category::BufferCache);
     set(Zone::BindStageBuffers, Category::BufferCache);

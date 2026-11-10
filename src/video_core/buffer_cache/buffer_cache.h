@@ -2648,6 +2648,13 @@ void BufferCache<P>::ResolveMultiRangeStorage(Binding& binding, bool is_written,
         if (is_written && !runtime.PrefersSparseSources()) {
             return;
         }
+        // A range inside one 4 KiB page lies in one GPU page, mapped to one device page: one
+        // segment at most, so Query would return fewer than two. Bananza binds a new written
+        // address in most draws, and each such miss walked the page table and added an entry.
+        if (Nx2SsboOnePage() &&
+            (binding.gpu_addr >> 12) == ((binding.gpu_addr + binding.size - 1) >> 12)) {
+            return;
+        }
         const VirtualSegments* found =
             virtual_ranges.Query(*gpu_memory, binding.gpu_addr, binding.size);
         if (!found || found->size() < 2) {
@@ -2946,11 +2953,17 @@ void BufferCache<P>::DoUpdateGraphicsBuffers(bool is_indexed) {
             UpdateVertexBuffers();
         }
         UpdateTransformFeedbackBuffers();
-        {
-            Nx2Profile::Scope scope{Nx2Profile::Zone::BufStages};
-            for (size_t stage = 0; stage < NUM_STAGES; ++stage) {
+        for (size_t stage = 0; stage < NUM_STAGES; ++stage) {
+            {
+                Nx2Profile::Scope scope{Nx2Profile::Zone::BufStages};
                 UpdateUniformBuffers(stage);
+            }
+            {
+                Nx2Profile::Scope scope{Nx2Profile::Zone::BufStorage};
                 UpdateStorageBuffers(stage);
+            }
+            {
+                Nx2Profile::Scope scope{Nx2Profile::Zone::BufTexture};
                 UpdateTextureBuffers(stage);
             }
         }

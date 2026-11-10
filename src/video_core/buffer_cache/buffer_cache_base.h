@@ -57,6 +57,16 @@ namespace VideoCommon {
 
 using BufferId = Common::SlotId;
 
+/// EDEN_NX2_SSBO_FAST=0 turns off skipping the multi-range lookup for a storage buffer inside
+/// one 4 KiB page (ported from Dozer).
+inline bool Nx2SsboOnePage() {
+    static const bool enabled = [] {
+        const char* value = std::getenv("EDEN_NX2_SSBO_FAST");
+        return value == nullptr || value[0] != '0';
+    }();
+    return enabled;
+}
+
 using VideoCore::Surface::PixelFormat;
 using namespace Common::Literals;
 
