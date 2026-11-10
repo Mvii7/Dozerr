@@ -298,7 +298,7 @@ endif()
 
 if (YUZU_CMD)
     add_subdirectory(yuzu_cmd)
-    set_target_properties(yuzu-cmd PROPERTIES OUTPUT_NAME "eden-cli")
+    set_target_properties(yuzu-cmd PROPERTIES OUTPUT_NAME "dozerr-cli")
 endif()
 
 if (ENABLE_QT)

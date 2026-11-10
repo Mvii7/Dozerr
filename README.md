@@ -1,102 +1,65 @@
 <!--
-# SPDX-FileCopyrightText: Copyright 2025 Eden Emulator Project
+# SPDX-FileCopyrightText: Copyright 2026 Dozerr contributors
 # SPDX-License-Identifier: GPL-3.0-or-later
-
-# SPDX-FileCopyrightText: 2018 yuzu Emulator Project
-# SPDX-License-Identifier: GPL-2.0-or-later
 -->
 
-<h2 align="center">⚠️ Lichii has no official website ⚠️</h2>
+# Dozerr
 
-> [!CAUTION]
-> **Lichii has no official website.** The only site run by this project is the **game compatibility website, [lichii.zortos.me](https://lichii.zortos.me)**, for compatibility reports only. Download Lichii **only** from this repository's [releases page](https://github.com/zortos293/Lichii/releases). Any other "Lichii" website or download (such as lichii.org) is not ours and may contain malware ([#545](https://github.com/zortos293/Lichii/issues/545)).
+Dozerr is a Nintendo Switch 2 emulator tuned for **Donkey Kong Bananza**. It is an independent
+fork of [Lichii](https://github.com/zortos293/Lichii), which builds on Eglantine, Eden, yuzu and
+Sudachi. It is not affiliated with Nintendo, with Lichii or with any of those projects.
 
-<p align="center">
-  <img src="dist/branding/lichii_icon_with_logo.png" alt="Lichii" width="600">
-</p>
+Dozerr is in early development. Support is very limited, and only Donkey Kong Bananza is tuned.
 
-# Lichii
+## Where this comes from
 
-Lichii is an experimental, open-source Nintendo Switch and Switch 2 emulator written in C++. It builds on Eglantine, Eden, yuzu and Sudachi, preserving their contributions while developing this fork's game compatibility and renderer fixes.
-
-This is an independent fork, not an official release of those upstream projects. Lichii is not affiliated with Nintendo.
-
-Visit the [Lichii game compatibility website](https://lichii.zortos.me) to find games and compare community compatibility reports.
+- **Lichii** is the base and the upstream: Dozerr follows it and merges its updates.
+- **Dozer**, an earlier fork of Anka, was tuned for the same game. Its performance work, above
+  all the host-GPU read of Bananza's indirect terrain draws, is being brought across to this
+  base one piece at a time. Dozer had an intermittent black shape with a white bloom halo on
+  destroyed terrain that Lichii does not show, and moving to this base is meant to keep it away.
 
 ## Downloads and setup
 
-Download Lichii only from this repository's [releases page](https://github.com/zortos293/Lichii/releases). Lichii has no other download site: archives offered elsewhere, such as lichii.org, are not built by this project, and one has been reported to install malware ([#545](https://github.com/zortos293/Lichii/issues/545)).
+Test builds are produced by this repository's GitHub Actions (the `dozer-test-builds` workflow,
+Windows only) and are attached to each run as an artifact. There is no installer and no
+automatic update yet.
 
-On Windows, extract the entire build archive and run **lichii.exe**. Only use games and system files you have legally obtained. Games, keys and firmware are not included.
+On Windows, extract the whole archive and run **dozerr.exe** (the command-line program is
+**dozerr-cli.exe**). Only use games and system files you have legally obtained. Games, keys and
+firmware are not included.
 
 ### Existing saves and settings
 
-The rebrand intentionally retains the existing Eden/Eglantine data directories and configuration keys. It does not move or delete saves, settings or shader caches. Back up your saves before testing experimental builds.
+Dozerr keeps Lichii's data directories and configuration keys, so an existing `user` folder
+carries over. Back up your saves before testing a new build.
 
-## Compatibility and issue reports
+## Reporting problems
 
-Compatibility and performance vary by game, hardware and driver. Rendering errors, stutters and crashes remain possible. Passing automated tests does not establish that a game renders correctly, and this project makes no universal frame-rate guarantee.
+When [reporting an issue](https://github.com/Mvii7/Dozerr/issues), include the exact build (the
+first line of the log names it), the game version, CPU, GPU and driver version, the settings and
+steps that reproduce it, a screenshot, and the log of the affected session after checking it for
+personal information. Do not upload game files, keys, firmware or private account information.
 
-Browse [community compatibility reports](https://lichii.zortos.me/reports) for results with each player's build and setup.
+## Building
 
-Desktop reporting requires a build containing [PR #303](https://github.com/zortos293/Lichii/pull/303) and is not available in build 88. In builds that include it, play and stop a Switch 2 game, then right-click that game and choose **Submit compatibility report**. Only the latest session in the current Lichii process is eligible.
-
-Confirm the matching website catalog entry and review the editable machine, game, setup, and enabled add-on details prefilled where available. Check the public preview and give explicit consent before submitting. Nothing uploads automatically, and the native v1 reporter does not read or upload logs or files.
-
-When [reporting an issue](https://github.com/zortos293/Eglantine/issues), include:
-
-- The exact build, game version, CPU, GPU and driver version.
-- Relevant settings and steps to reproduce the problem.
-- A screenshot and the log from the affected session, after checking it for personal information.
-
-Do not upload game files, keys, firmware or private account information.
-
-## Building and contributing
-
-See the [build guide](docs/Build.md), [user documentation](docs/user/README.md) and [coding guidelines](docs/Coding.md). Some inherited documentation and internal build target names still use upstream names. The GUI build target remains `yuzu`; its output is `lichii.exe` on Windows and `lichii` on other desktop platforms.
-
-Keep changes focused and distinguish code-level checks from actual gameplay testing.
+See the [build guide](docs/Build.md), the [user documentation](docs/user/README.md) and the
+[coding guidelines](docs/Coding.md). Lichii's own readme is kept as
+[docs/LICHII_README.md](docs/LICHII_README.md). Some inherited documentation and internal build
+target names still use upstream names.
 
 ## Artwork
-Art created by YOB (yobslab)
-The supplied Lichii logo, icon and library artwork are in [dist/branding](dist/branding). Windows, Linux and macOS icon resources are generated from that artwork by [Generate-LichiiIcons.ps1](tools/Generate-LichiiIcons.ps1).
 
-## Support Lichii
-
-Lichii is free and stays free. If you want to help, you can donate in crypto. Donations help pay for the AI tools and build machines used to develop this open-source project faster.
-
-**Solana (SOL)**
-```text
-JepEjfyWjGjhJvHSrqj52KtLjcbbbmUh1iGqerYBF4w
-```
-
-**Ethereum (ETH)**
-```text
-0x055ABa1b80Bc35C836Ce7E9F47c2b3d6C75b5534
-```
-
-**Bitcoin (BTC)**
-```text
-bc1qcvxdpf4qvdhqp8ee4s355cjmxrzsphsdwpl8w4
-```
-
-**BNB Smart Chain (BNB)**
-```text
-0x055ABa1b80Bc35C836Ce7E9F47c2b3d6C75b5534
-```
-
-**Polygon**
-```text
-0x055ABa1b80Bc35C836Ce7E9F47c2b3d6C75b5534
-```
-
-Send each coin on its matching network. Coins sent on the wrong network can't be recovered.
-
-> [!NOTE]
-> Donations are voluntary gifts and are non-refundable. A donation does not buy any product, service, perk, early access, exclusive build, priority support or say in the project. Every release stays free and public for everyone.
+The Dozerr mark is a D whose flat edge is a bulldozer blade. It is drawn by
+[dist/dozerr/dozerr_logo.py](dist/dozerr/dozerr_logo.py), which writes `dist/dozerr.ico`,
+`dist/dozerr.icns`, `dist/dozerr.bmp` and `dist/dozerr.png`. Lichii's artwork, by YOB
+(yobslab), is still in [dist/branding](dist/branding).
 
 ## Credits and license
 
-Lichii inherits the work of the Eglantine, Eden, yuzu and Sudachi projects and their contributors, including Eglantine's original developer Camille LaVey. Original copyright notices and third-party licenses are retained.
+Dozerr inherits the work of the Lichii, Eglantine, Eden, yuzu and Sudachi projects and their
+contributors, including Eglantine's original developer Camille LaVey, and the work of Anka
+(EddizEge) that Dozer was built on. Original copyright notices and third-party license files are
+kept in the source tree.
 
-See [LICENSE.txt](LICENSE.txt) and the source files for applicable license terms.
+See [LICENSE.txt](LICENSE.txt) and the source files for the applicable license terms.

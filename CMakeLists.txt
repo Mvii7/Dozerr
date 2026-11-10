@@ -298,7 +298,7 @@ option(NIGHTLY_BUILD "Use Nightly qualifiers in the update checker and build met
 cmake_dependent_option(YUZU_ROOM "Enable dedicated room functionality" ON "NOT ANDROID" OFF)
 cmake_dependent_option(YUZU_ROOM_STANDALONE "Enable standalone room executable" ON "YUZU_ROOM" OFF)
 
-cmake_dependent_option(YUZU_CMD "Compile the eden-cli executable" ON "NOT ANDROID" OFF)
+cmake_dependent_option(YUZU_CMD "Compile the dozerr-cli executable" ON "NOT ANDROID" OFF)
 
 cmake_dependent_option(YUZU_CRASH_DUMPS "Compile crash dump (Minidump) support" OFF "WIN32 OR LINUX" OFF)
 
@@ -772,7 +772,7 @@ endif()
 if(ENABLE_QT AND UNIX AND NOT APPLE)
     install(FILES "dist/io.github.zortos293.lichii.desktop"
         DESTINATION "share/applications")
-    install(FILES "dist/lichii.png"
+    install(FILES "dist/dozerr.png"
         DESTINATION "share/icons/hicolor/256x256/apps"
         RENAME "io.github.zortos293.lichii.png")
 
