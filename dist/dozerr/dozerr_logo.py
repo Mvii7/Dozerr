@@ -129,13 +129,15 @@ def render_banner(width=1600, height=400):
     panel.paste(gradient, (0, 0), mask)
     icon_size = int(h * 0.72)
     icon = render(256).resize((icon_size, icon_size), Image.LANCZOS)
-    left = int(h * 0.14)
-    panel.alpha_composite(icon, (left, (h - icon_size) // 2))
     draw = ImageDraw.Draw(panel)
     font = load_font(int(h * 0.46))
     text = 'Dozerr'
     box = draw.textbbox((0, 0), text, font=font)
-    text_x = left + icon_size + int(h * 0.10)
+    gap = int(h * 0.10)
+    group_w = icon_size + gap + (box[2] - box[0])
+    left = (w - group_w) // 2
+    panel.alpha_composite(icon, (left, (h - icon_size) // 2))
+    text_x = left + icon_size + gap - box[0]
     text_y = (h - (box[3] - box[1])) // 2 - box[1]
     draw.text((text_x, text_y), text, font=font, fill=YELLOW)
     return panel.resize((width, height), Image.LANCZOS)
